@@ -1,0 +1,28 @@
+# Binaries
+/redthread
+/bfaf
+/sticky
+*.exe
+
+# Go build / test artifacts
+/dist/
+/build/
+*.test
+*.out
+
+# Personal save backups (contain real notes — don't commit)
+FIRST-SAVE-*.json
+*-backup-*.json
+notes-backup-*.json
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.project
+.classpath
+
+# OS
+.DS_Store
+Thumbs.db
