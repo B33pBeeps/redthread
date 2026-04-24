@@ -37,14 +37,14 @@ and physics-y red strings you can dangle between notes.
 # clone + build
 git clone https://github.com/B33pBeeps/redthread.git
 cd redthread
-go build -o redthread .
+go build -o redthread ./cmd/redthread
 ./redthread
 ```
 
 Or install straight from GitHub:
 
 ```bash
-go install github.com/B33pBeeps/redthread@latest
+go install github.com/B33pBeeps/redthread/cmd/redthread@latest
 redthread
 ```
 
@@ -133,18 +133,26 @@ Edit any of those, rebuild, and the whole app picks up the new values
 ## File layout
 
 ```
-main.go        entry, flag parsing
-model.go       Bubble Tea MVU (Model/Update/View, key + mouse routing)
-notes.go       Note, Board, StringConn, zoom scale, starfield gen
-draw.go        cork + note rendering (shadow, tape, borders, text, fibers)
-strings.go     red-string curve rendering + pull physics
-render.go      cell grid + coalesced ANSI emitter (transparent bg)
-theme.go       colors, tints, Bayer dither, halftone, fancy-text mapping
-anim.go        zoom transition timeline + easings
-edit.go        canvas-drawn edit frame + bubbles/textarea splice
-menu.go        font-picker popup
-storage.go     XDG JSON persistence with debounced saver
-DESIGN.md      earlier design notes (historical)
+cmd/redthread/
+  main.go          thin entry — calls internal/app.Run()
+
+internal/app/
+  app.go           Run(): flag parsing, load/seed, launch Bubble Tea
+  model.go         MVU (Model/Update/View, key + mouse routing)
+  notes.go         Note, Board, StringConn, zoom scale, starfield gen
+  draw.go          cork + note rendering (shadow, tape, borders, text, fibers)
+  wire.go          red-string curve rendering + pull physics
+  render.go        cell grid + coalesced ANSI emitter (transparent bg)
+  theme.go         colors, tints, Bayer dither, halftone, text-style mapping
+  anim.go          zoom transition timeline + easings
+  edit.go          canvas-drawn edit frame + bubbles/textarea splice
+  menu.go          font-picker popup
+  storage.go       XDG JSON persistence with debounced saver
+
+docs/
+  screenshot.png
+
+DESIGN.md          earlier design notes (historical)
 ```
 
 ## Text preview
@@ -154,7 +162,7 @@ what the board looks like at default zoom:
 
 ```
   ╭━╍━─━╍━─━◈━─━╍━─━╍━╮
-  ┃ ◆ welcome    04/24 │
+  ┃ ◆ welcome          │
   ├┄──┄──┄──┄──┄──┄──┄┤
   ╏ • drag with mouse  │
   ╏ • tab cycles       │

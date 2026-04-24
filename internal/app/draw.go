@@ -1,4 +1,4 @@
-package main
+package app
 
 // draw.go — cork + note + shadow drawing with zoom-aware rect parameter.
 // drawNote + drawNoteAt let the same function render at any size so the
@@ -194,11 +194,7 @@ func drawNoteFrame(c *Canvas, rect Rect, n *Note, selected bool, textMode TextSt
 		title = StyleText(title, textMode)
 		titleAttr := AttrBold | ModeAttr(textMode)
 
-		showDate := w >= 28
 		maxTitle := w - 6
-		if showDate {
-			maxTitle -= 7
-		}
 		if maxTitle < 4 {
 			maxTitle = 4
 		}
@@ -206,12 +202,6 @@ func drawNoteFrame(c *Canvas, rect Rect, n *Note, selected bool, textMode TextSt
 			title = trimRunes(title, maxTitle-1) + "…"
 		}
 		c.WriteText(x0+4, y0+1, title, ink, titleAttr)
-
-		if showDate {
-			dateText := n.Updated.Format("01/02")
-			dateX := x0 + w - 1 - 1 - runeLen(dateText)
-			c.WriteText(dateX, y0+1, dateText, ink.Dimmed(0.72), AttrFaint)
-		}
 	}
 
 	// Separator row
@@ -354,13 +344,8 @@ func drawNoteInternal(c *Canvas, rect Rect, n *Note, selected bool, textMode Tex
 		title = StyleText(title, textMode)
 		titleAttr := AttrBold | ModeAttr(textMode)
 
-		// Reserve date stamp if room allows (>= 28 wide).
-		showDate := w >= 28
 		titleStart := x0 + 4
 		maxTitle := w - 6
-		if showDate {
-			maxTitle -= 7
-		}
 		if maxTitle < 4 {
 			maxTitle = 4
 		}
@@ -368,12 +353,6 @@ func drawNoteInternal(c *Canvas, rect Rect, n *Note, selected bool, textMode Tex
 			title = trimRunes(title, maxTitle-1) + "…"
 		}
 		c.WriteText(titleStart, y0+titleRow, title, ink, titleAttr)
-
-		if showDate {
-			dateText := n.Updated.Format("01/02")
-			dateX := x0 + w - 1 - 1 - runeLen(dateText)
-			c.WriteText(dateX, y0+titleRow, dateText, ink.Dimmed(0.72), AttrFaint)
-		}
 	}
 
 	// 6. Separator (row 2).

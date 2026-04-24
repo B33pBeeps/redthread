@@ -1,4 +1,4 @@
-package main
+package app
 
 // menu.go — font picker popup (tmux-menu style). Right-anchored, lists
 // all TextStyleMode options with a live preview rendered using each

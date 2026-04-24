@@ -1,4 +1,4 @@
-package main
+package app
 
 // storage.go — loads and saves the board (notes + strings + text mode)
 // to a JSON file under the XDG data directory, with debounced writes.

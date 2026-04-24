@@ -1,4 +1,4 @@
-package main
+package app
 
 // theme.go — colors, tint palettes, dither tables, character pools,
 // and fancy-text (Unicode math-bold / double-struck) helpers.

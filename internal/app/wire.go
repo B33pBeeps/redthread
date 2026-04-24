@@ -1,4 +1,4 @@
-package main
+package app
 
 // strings.go — red-string rendering (between notes or between a note and
 // a wall-pin), plus "pull" state with spring-damped free end.

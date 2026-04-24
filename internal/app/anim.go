@@ -1,4 +1,4 @@
-package main
+package app
 
 // anim.go — smooth 3D zoom transition (no flash, no vignette, no dither).
 // The note rect interpolates from source to a centered card rect. A half-

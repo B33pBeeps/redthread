@@ -1,4 +1,4 @@
-package main
+package app
 
 // edit.go — zoom-to-edit view with a canvas-drawn ornate frame and a
 // bubbles/textarea spliced inside the body area. Backdrop shows the

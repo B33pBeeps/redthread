@@ -1,4 +1,4 @@
-package main
+package app
 
 // notes.go — Note, Board (with world-coord notes + zoom scale that
 // affects BOTH positions AND sizes), StringConn with wall-pins, cork gen.

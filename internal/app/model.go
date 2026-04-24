@@ -1,4 +1,4 @@
-package main
+package app
 
 // model.go — Bubble Tea MVU. Wires board, zoom, strings, transitions,
 // editor, font menu, persistence.

@@ -1,7 +1,7 @@
-package main
+package app
 
-// main.go — entry point. Loads board from disk (or seeds a fresh one),
-// launches Bubble Tea with the alt screen + full mouse support.
+// app.go — top-level entry. Loads board (or seeds a fresh one), launches
+// the Bubble Tea program with alt-screen + full mouse motion.
 
 import (
 	"flag"
@@ -11,7 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func main() {
+// Run is the package's main entry point. cmd/redthread/main.go calls it.
+func Run() {
 	var fresh bool
 	flag.BoolVar(&fresh, "fresh", false, "start with a fresh seeded board, ignore saved notes")
 	flag.Parse()
@@ -30,16 +31,10 @@ func main() {
 	board.ApplyGlobalBorder()
 
 	m := initialModel(board)
-
-	p := tea.NewProgram(
-		m,
-		tea.WithAltScreen(),
-		tea.WithMouseAllMotion(),
-	)
+	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	// final flush on normal exit
 	_ = SaveBoard(board)
 }

@@ -1,4 +1,4 @@
-package main
+package app
 
 // render.go — cell grid and ANSI serializer.
 //
