@@ -50,19 +50,29 @@ func (p *PullState) Stop() {
 
 // --- rendering ---------------------------------------------------------
 
+// PinOverride lets callers substitute the screen position used for a
+// specific note's string endpoints — used during the zoom-to-edit
+// transition so strings follow the morphing rect instead of the original
+// pin location.
+type PinOverride struct {
+	NoteID string
+	X, Y   int
+}
+
 // drawStringsBehind renders only the strings with InFront=false. Called
-// BEFORE notes are drawn so they sit beneath. If `grabID` is non-empty,
-// strings touching that note are SKIPPED here — they get drawn with the
-// in-front pass instead, so the attachment stays visible while dragging.
-func drawStringsBehind(c *Canvas, b *Board, hoverIdx int, grabID string) {
-	drawStringSet(c, b, hoverIdx, false, grabID)
+// BEFORE notes are drawn so they sit beneath. If `attachToTopID` is
+// non-empty, strings touching that note are SKIPPED here — they get
+// drawn with the in-front pass instead, so the attachment stays visible
+// while dragging or zooming.
+func drawStringsBehind(c *Canvas, b *Board, hoverIdx int, attachToTopID string, override *PinOverride) {
+	drawStringSet(c, b, hoverIdx, false, attachToTopID, override)
 }
 
 // drawStringsInFront renders strings with InFront=true plus any string
-// touching the dragged note (so picked-up notes stay visibly attached),
+// touching the active "attachToTopID" note (dragged or transitioning),
 // plus the in-progress pull. Called AFTER notes so they sit on top.
-func drawStringsInFront(c *Canvas, b *Board, pull *PullState, hoverIdx int, grabID string) {
-	drawStringSet(c, b, hoverIdx, true, grabID)
+func drawStringsInFront(c *Canvas, b *Board, pull *PullState, hoverIdx int, attachToTopID string, override *PinOverride) {
+	drawStringSet(c, b, hoverIdx, true, attachToTopID, override)
 	if pull != nil && pull.Active {
 		from := b.FindNote(pull.FromID)
 		if from != nil {
@@ -79,8 +89,8 @@ func drawStringsInFront(c *Canvas, b *Board, pull *PullState, hoverIdx int, grab
 // drawAllStrings is the legacy combined renderer (used by the edit-mode
 // backdrop where draw order is just one pass).
 func drawAllStrings(c *Canvas, b *Board, pull *PullState, hoverIdx int) {
-	drawStringSet(c, b, hoverIdx, false, "")
-	drawStringSet(c, b, hoverIdx, true, "")
+	drawStringSet(c, b, hoverIdx, false, "", nil)
+	drawStringSet(c, b, hoverIdx, true, "", nil)
 	if pull != nil && pull.Active {
 		from := b.FindNote(pull.FromID)
 		if from != nil {
@@ -95,20 +105,22 @@ func drawAllStrings(c *Canvas, b *Board, pull *PullState, hoverIdx int) {
 }
 
 // drawStringSet is the shared inner loop. It draws strings whose
-// effective in-front layer matches `inFront`. If `grabID` is set, any
-// string touching that note is forced to the in-front layer so a
-// picked-up note's attachments stay visible on top.
-func drawStringSet(c *Canvas, b *Board, hoverIdx int, inFront bool, grabID string) {
+// effective in-front layer matches `inFront`. If `attachToTopID` is set,
+// any string touching that note is forced to the in-front layer so the
+// attachment stays visible on top. If `override` is set, that note's
+// endpoint screen position is replaced with the override's X/Y (used by
+// the zoom transition so strings follow the morphing rect).
+func drawStringSet(c *Canvas, b *Board, hoverIdx int, inFront bool, attachToTopID string, override *PinOverride) {
 	for i, s := range b.Strings {
 		effectiveInFront := s.InFront
-		if grabID != "" && s.InvolvesNote(grabID) {
+		if attachToTopID != "" && s.InvolvesNote(attachToTopID) {
 			effectiveInFront = true
 		}
 		if effectiveInFront != inFront {
 			continue
 		}
-		ax, ay, aok := s.A.Pos(b)
-		bx, by, bok := s.B.Pos(b)
+		ax, ay, aok := resolveEndpoint(b, &s.A, override)
+		bx, by, bok := resolveEndpoint(b, &s.B, override)
 		if !aok || !bok {
 			continue
 		}
@@ -133,6 +145,15 @@ func drawStringSet(c *Canvas, b *Board, hoverIdx int, inFront bool, grabID strin
 			c.SetRune(bx, by, tipGlyph, col, AttrBold)
 		}
 	}
+}
+
+// resolveEndpoint returns an endpoint's screen position, honoring the
+// optional pin override (used by the zoom transition).
+func resolveEndpoint(b *Board, e *StringEnd, override *PinOverride) (int, int, bool) {
+	if override != nil && e.NoteID != "" && e.NoteID == override.NoteID {
+		return override.X, override.Y, true
+	}
+	return e.Pos(b)
 }
 
 // drawCurve is the low-level renderer. If `tight`, straight line. Else,

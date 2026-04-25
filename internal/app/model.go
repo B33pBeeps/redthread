@@ -32,9 +32,9 @@ type model struct {
 	stars     []Star
 	saver     *Saver
 
-	grabID string
-	grabDx int
-	grabDy int
+	grabID                 string
+	grabDx, grabDy         int
+	grabStartX, grabStartY int // world-coords at press, used to detect click vs drag
 
 	pull     PullState
 	hoverStr int
@@ -672,6 +672,8 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		wy := WorldY(msg.Y, m.board.Zoom)
 		m.grabDx = wx - n.X
 		m.grabDy = wy - n.Y
+		m.grabStartX = n.X
+		m.grabStartY = n.Y
 		n.Lifted = true
 		n.Flash = 0.6
 		m.hoverStr = -1
@@ -696,10 +698,18 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	case tea.MouseActionRelease:
 		if m.grabID != "" {
 			if n := m.findNote(m.grabID); n != nil {
-				n.Bob = 2.2 // stronger drop bounce
+				moved := n.X != m.grabStartX || n.Y != m.grabStartY
+				if moved {
+					// Drop bounce after an actual move
+					n.Bob = 2.2
+					n.Updated = time.Now().UTC()
+					m.saver.Touch()
+				} else {
+					// Click without move → small cycle-style jiggle
+					n.Bob = 1.4
+					n.BobX = 0.6
+				}
 				n.Lifted = false
-				n.Updated = time.Now().UTC()
-				m.saver.Touch()
 			}
 			m.grabID = ""
 		}
@@ -758,7 +768,7 @@ func (m model) drawBoardView(c *Canvas) {
 	// 1) Behind-strings first (under notes). Strings touching the
 	//    grabbed note are skipped here and drawn on top in step 3 so
 	//    the attachment stays visible while dragging.
-	drawStringsBehind(c, m.board, m.hoverStr, m.grabID)
+	drawStringsBehind(c, m.board, m.hoverStr, m.grabID, nil)
 
 	// 2) Notes (back-to-front, skipping grabbed so we can draw it on top)
 	for _, n := range m.board.Notes {
@@ -777,7 +787,7 @@ func (m model) drawBoardView(c *Canvas) {
 
 	// 3) In-front-strings + strings touching the grabbed note + the
 	//    active pull overlay.
-	drawStringsInFront(c, m.board, &m.pull, m.hoverStr, m.grabID)
+	drawStringsInFront(c, m.board, &m.pull, m.hoverStr, m.grabID, nil)
 }
 
 // drawTransitionView — clean 3D zoom with an animated backdrop fade.
@@ -794,8 +804,18 @@ func (m model) drawTransitionView(c *Canvas) {
 	// Base board (cork + background notes + strings) — drawn first, then
 	// dimmed together so the fade feels unified.
 	drawCork(c, m.stars)
-	drawStringsBehind(c, m.board, -1, "")
+
 	focusID := m.transition.NoteID
+	// During the transition, the focused note's pin lives at the
+	// morphing rect — strings should follow.
+	override := &PinOverride{
+		NoteID: focusID,
+		X:      morphing.X + morphing.W/2,
+		Y:      morphing.Y + lift,
+	}
+	// Strings touching the focused note are deferred to the in-front
+	// pass so they sit on top of the floating card.
+	drawStringsBehind(c, m.board, -1, focusID, override)
 	for _, n := range m.board.Notes {
 		if n.ID == focusID {
 			continue
@@ -803,7 +823,7 @@ func (m model) drawTransitionView(c *Canvas) {
 		drawShadow(c, n, m.board.Zoom)
 		drawNote(c, n, false, m.board.TextMode, m.board.Zoom)
 	}
-	drawStringsInFront(c, m.board, nil, -1, "")
+	drawStringsInFront(c, m.board, nil, -1, focusID, override)
 
 	// Animated fade: 1.0 (no dim) → 0.38 (edit-mode dim).
 	const editDim = float32(0.38)
