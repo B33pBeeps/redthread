@@ -92,10 +92,17 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 
 	// 1. Backdrop — board dimmed so the card pops. The focused note is
 	// OMITTED so the card appears on a cleaner background (no echo of
-	// itself behind the frame).
+	// itself behind the frame). Strings touching the focused note are
+	// re-anchored to the card's pin position so they stay attached
+	// where the transition left them, instead of snapping back.
 	c := NewCanvas(w, h-1)
 	drawCork(c, stars)
-	drawAllStrings(c, board, nil, -1)
+	editPin := &PinOverride{
+		NoteID: n.ID,
+		X:      rect.X + rect.W/2,
+		Y:      rect.Y,
+	}
+	drawAllStrings(c, board, nil, -1, editPin)
 	for _, bn := range board.Notes {
 		if bn.ID == n.ID {
 			continue
