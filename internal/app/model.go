@@ -102,11 +102,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.pull.Tick()
-		// help panel ease toward target
+		// help panel ease toward target. The snap threshold is generous
+		// (0.02) so the exponential tail doesn't leave a stuck "near-zero"
+		// frame visible on close.
 		if m.helpTarget != m.helpAnim {
 			diff := m.helpTarget - m.helpAnim
-			m.helpAnim += diff * 0.22
-			if absF(diff) < 0.005 {
+			m.helpAnim += diff * 0.28
+			if absF(diff) < 0.02 {
 				m.helpAnim = m.helpTarget
 			}
 		}
@@ -743,16 +745,23 @@ type helpColumn struct {
 // column's keys and descriptions are aligned to fixed widths derived
 // from the longest item, so columns never drift.
 var helpData = []helpColumn{
-	{"NAVIGATE", []helpEntry{
+	{"MOUSE", []helpEntry{
 		{"drag", "move"},
 		{"click", "select"},
 		{"dblclk", "zoom"},
+	}},
+	{"KEYS", []helpEntry{
+		{"arrows", "nudge"},
+		{"hjkl", "nudge"},
+		{"S-arr", "nudge ×5"},
 		{"tab", "next"},
+		{"S-tab", "prev"},
 	}},
 	{"NOTES", []helpEntry{
 		{"enter", "zoom-edit"},
 		{"n", "new"},
 		{"d", "delete"},
+		{"r", "raise"},
 		{"1-9", "tint"},
 	}},
 	{"STRINGS", []helpEntry{
@@ -761,12 +770,13 @@ var helpData = []helpColumn{
 		{"t", "tight/slack"},
 		{"f", "front/behind"},
 		{"x", "cut"},
+		{"X", "cut all"},
 	}},
 	{"VIEW", []helpEntry{
 		{"-/=/0", "zoom"},
 		{"a", "font menu"},
-		{"c", "cycle highlight"},
-		{"?", "toggle this"},
+		{"c", "highlight"},
+		{"?", "toggle"},
 		{"q", "quit"},
 	}},
 }
@@ -824,8 +834,10 @@ func drawHelpPanel(c *Canvas, anim float32) {
 	if panelH > c.H-2 {
 		panelH = c.H - 2
 	}
-	if panelH < 2 {
-		panelH = 2 // a thin top edge during fade
+	if panelH < 1 {
+		// Panel has fully retracted — don't draw anything (avoids the
+		// "stuck thin sliver" frame at the tail of the close animation).
+		return
 	}
 
 	panelW := contentW + 6 // 1 border + 2 padding each side
