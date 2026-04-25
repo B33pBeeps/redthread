@@ -95,6 +95,11 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 	// itself behind the frame). Strings touching the focused note are
 	// re-anchored to the card's pin position so they stay attached
 	// where the transition left them, instead of snapping back.
+	//
+	// Order matters: behind-strings → other notes → in-front-strings,
+	// then dim the whole thing. This keeps `InFront=true` strings on top
+	// of notes even after the blur is applied (without it, they'd sit
+	// underneath because everything was being drawn before the notes).
 	c := NewCanvas(w, h-1)
 	drawCork(c, stars)
 	editPin := &PinOverride{
@@ -102,7 +107,9 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 		X:      rect.X + rect.W/2,
 		Y:      rect.Y,
 	}
-	drawAllStrings(c, board, nil, -1, editPin)
+	// Behind-strings: respect InFront flag; strings touching the focus
+	// are deferred to the in-front pass via attachToTopID.
+	drawStringsBehind(c, board, -1, n.ID, editPin)
 	for _, bn := range board.Notes {
 		if bn.ID == n.ID {
 			continue
@@ -110,6 +117,9 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 		drawShadow(c, bn, board.Zoom)
 		drawNote(c, bn, false, textMode, board.Zoom)
 	}
+	// In-front-strings (incl. those touching focus): drawn AFTER notes
+	// so they sit on top of cards even when dimmed.
+	drawStringsInFront(c, board, nil, -1, n.ID, editPin)
 	c.Dim(0.38)
 
 	// 2. Ornate frame — border in the note's own tint (not red).
