@@ -23,12 +23,14 @@ func tickCmd() tea.Cmd {
 }
 
 type model struct {
-	w, h  int
-	now   time.Time
-	mode  Mode
-	board *Board
-	stars []Star
-	saver *Saver
+	w, h int
+	now  time.Time
+	mode Mode
+
+	workspace *Workspace
+	board     *Board // always points to workspace.ActiveBoard()
+	stars     []Star
+	saver     *Saver
 
 	grabID string
 	grabDx int
@@ -51,6 +53,10 @@ type model struct {
 
 	fontMenu *FontMenu
 
+	// rename mode: when true, keystrokes edit renameBuffer until enter/esc.
+	renaming     bool
+	renameBuffer string
+
 	// transient status message shown in the footer
 	toast      string
 	toastUntil time.Time
@@ -58,14 +64,32 @@ type model struct {
 	mouseX, mouseY int
 }
 
-func initialModel(board *Board) model {
-	return model{
-		mode:     ModeBoard,
-		board:    board,
-		now:      time.Now(),
-		saver:    NewSaver(board, 400*time.Millisecond),
-		hoverStr: -1,
+func initialModel(ws *Workspace) model {
+	m := model{
+		mode:      ModeBoard,
+		workspace: ws,
+		board:     ws.ActiveBoard(),
+		now:       time.Now(),
+		saver:     NewSaver(ws, 400*time.Millisecond),
+		hoverStr:  -1,
 	}
+	return m
+}
+
+// refreshActive points m.board at the workspace's current active board
+// and regenerates per-board state (stars + global highlight color).
+func (m *model) refreshActive() {
+	m.board = m.workspace.ActiveBoard()
+	if m.board == nil {
+		return
+	}
+	m.board.ApplyGlobalBorder()
+	if m.w > 0 && m.h > 0 {
+		m.stars = GenStarsForBoard(m.w, m.h, m.board.GrainSeed)
+	}
+	m.hoverStr = -1
+	m.grabID = ""
+	m.pull.Stop()
 }
 
 func (m model) Init() tea.Cmd { return tickCmd() }
@@ -76,7 +100,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
-		m.stars = GenStars(m.w, m.h)
+		seed := int64(0)
+		if m.board != nil {
+			seed = m.board.GrainSeed
+		}
+		m.stars = GenStarsForBoard(m.w, m.h, seed)
 		if m.mode == ModeEdit {
 			m.editor.Resize(m.w, m.h)
 		}
@@ -150,6 +178,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.transition != nil {
 		return m, nil
 	}
+	if m.renaming {
+		return m.handleRenameKey(msg, key)
+	}
 	if m.fontMenu != nil {
 		return m.handleFontMenuKey(key)
 	}
@@ -162,6 +193,42 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleBoardKey(key)
 	case ModeEdit:
 		return m.handleEditKey(msg, key)
+	}
+	return m, nil
+}
+
+// handleRenameKey intercepts every keystroke while the user is editing a
+// board's name in the tab bar. Enter commits, esc cancels.
+func (m model) handleRenameKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc":
+		m.renaming = false
+		m.renameBuffer = ""
+		return m, nil
+	case "enter":
+		name := m.renameBuffer
+		if name == "" {
+			name = "board " + intToStr(m.workspace.ActiveIdx+1)
+		}
+		if m.board != nil {
+			m.board.Name = name
+			m.saver.Touch()
+		}
+		m.renaming = false
+		m.renameBuffer = ""
+		return m, nil
+	case "backspace":
+		if r := []rune(m.renameBuffer); len(r) > 0 {
+			m.renameBuffer = string(r[:len(r)-1])
+		}
+		return m, nil
+	}
+	// Plain rune input
+	if len(msg.Runes) > 0 {
+		// Reasonable cap so the tab bar doesn't blow up
+		if len([]rune(m.renameBuffer)) < 24 {
+			m.renameBuffer += string(msg.Runes)
+		}
 	}
 	return m, nil
 }
@@ -196,6 +263,36 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 	case "q":
 		_ = m.saver.Flush()
 		return m, tea.Quit
+	case ">", ".":
+		// Next board
+		m.workspace.CycleActive(1)
+		m.refreshActive()
+		m.saver.Touch()
+		m.setToast("board: " + m.board.Name)
+		return m, nil
+	case "<", ",":
+		// Previous board
+		m.workspace.CycleActive(-1)
+		m.refreshActive()
+		m.saver.Touch()
+		m.setToast("board: " + m.board.Name)
+		return m, nil
+	case "B":
+		// Create a new board with a unique grain seed.
+		nb := m.workspace.AddBoard("")
+		m.refreshActive()
+		m.saver.Touch()
+		// Drop straight into rename mode so the user can name it.
+		m.renaming = true
+		m.renameBuffer = nb.Name
+		return m, nil
+	case "R":
+		// Rename the active board.
+		if m.board != nil {
+			m.renaming = true
+			m.renameBuffer = m.board.Name
+		}
+		return m, nil
 	case "?":
 		// Toggle the bottom-anchored help panel; tick eases the height.
 		if m.helpTarget < 0.5 {
@@ -609,6 +706,7 @@ func (m model) View() string {
 	} else {
 		m.drawBoardView(c)
 	}
+	m.drawTabBar(c)
 	m.drawFooterView(c)
 	if m.helpAnim > 0.001 {
 		drawHelpPanel(c, m.helpAnim)
@@ -698,6 +796,56 @@ func (m model) drawTransitionView(c *Canvas) {
 	drawNoteAtWithBorder(c, rect, focus, m.board.TextMode, tint.Paper)
 }
 
+// drawTabBar draws row 0: " redthread  • work │  personal │  ideas ".
+// The active board has a "•" prefix and brighter color. While renaming,
+// the active board's slot becomes an inline editor.
+func (m model) drawTabBar(c *Canvas) {
+	if c.W < 4 {
+		return
+	}
+	for x := 0; x < c.W; x++ {
+		c.SetBlank(x, 0)
+	}
+	cur := 1
+	c.WriteText(cur, 0, "redthread", PinRed, AttrBold)
+	cur += runeLen("redthread") + 1
+	c.SetRune(cur, 0, '│', Footer, 0)
+	cur += 2
+	for i, b := range m.workspace.Boards {
+		if i > 0 {
+			c.SetRune(cur, 0, '│', Footer, 0)
+			cur += 2
+		}
+		isActive := i == m.workspace.ActiveIdx
+		name := b.Name
+		if name == "" {
+			name = "board " + intToStr(i+1)
+		}
+		// Rename slot: replace the active name with the live buffer + caret.
+		if m.renaming && isActive {
+			disp := m.renameBuffer + "▏"
+			c.WriteText(cur, 0, "✎ ", PinRed, AttrBold)
+			cur += 2
+			c.WriteText(cur, 0, disp, Flash, AttrBold)
+			cur += runeLen(disp) + 1
+			continue
+		}
+		marker := "  "
+		col := DimText
+		attr := uint8(0)
+		if isActive {
+			marker = "● "
+			col = Flash
+			attr = AttrBold
+		}
+		c.WriteText(cur, 0, marker+name, col, attr)
+		cur += runeLen(marker+name) + 1
+		if cur >= c.W-1 {
+			break
+		}
+	}
+}
+
 func (m model) drawFooterView(c *Canvas) {
 	// Transient toast takes priority when active.
 	if !m.toastUntil.IsZero() && m.now.Before(m.toastUntil) {
@@ -772,9 +920,15 @@ var helpData = []helpColumn{
 		{"x", "cut"},
 		{"X", "cut all"},
 	}},
+	{"BOARDS", []helpEntry{
+		{">", "next"},
+		{"<", "prev"},
+		{"B", "new"},
+		{"R", "rename"},
+	}},
 	{"VIEW", []helpEntry{
 		{"-/=/0", "zoom"},
-		{"a", "font menu"},
+		{"a", "font"},
 		{"c", "highlight"},
 		{"?", "toggle"},
 		{"q", "quit"},

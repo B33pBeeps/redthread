@@ -203,12 +203,95 @@ func (e *StringEnd) Pos(b *Board) (int, int, bool) {
 // --- Board -------------------------------------------------------------
 
 type Board struct {
-	Notes          []*Note
-	Strings        []*StringConn
-	Selected       string
-	TextMode       TextStyleMode
-	Zoom           int `json:"zoom,omitempty"`
-	HighlightColor int `json:"highlightColor,omitempty"` // index into SelBorderChoices
+	Name           string        `json:"name"`
+	GrainSeed      int64         `json:"grainSeed,omitempty"`
+	Notes          []*Note       `json:"notes"`
+	Strings        []*StringConn `json:"strings,omitempty"`
+	Selected       string        `json:"-"`
+	TextMode       TextStyleMode `json:"textMode,omitempty"`
+	Zoom           int           `json:"zoom,omitempty"`
+	HighlightColor int           `json:"highlightColor,omitempty"`
+}
+
+// Workspace is a list of named cork boards the user can cycle between.
+// One is "active"; everything in the running model points at that one.
+type Workspace struct {
+	Boards    []*Board `json:"boards"`
+	ActiveIdx int      `json:"activeIdx,omitempty"`
+}
+
+// ActiveBoard returns the currently-focused board, never nil while the
+// workspace has at least one board.
+func (w *Workspace) ActiveBoard() *Board {
+	if len(w.Boards) == 0 {
+		return nil
+	}
+	if w.ActiveIdx < 0 {
+		w.ActiveIdx = 0
+	}
+	if w.ActiveIdx >= len(w.Boards) {
+		w.ActiveIdx = len(w.Boards) - 1
+	}
+	return w.Boards[w.ActiveIdx]
+}
+
+// CycleActive moves the active index by `delta`, wrapping around.
+func (w *Workspace) CycleActive(delta int) {
+	if len(w.Boards) == 0 {
+		return
+	}
+	w.ActiveIdx += delta
+	for w.ActiveIdx < 0 {
+		w.ActiveIdx += len(w.Boards)
+	}
+	w.ActiveIdx %= len(w.Boards)
+}
+
+// AddBoard appends a fresh board with a unique grain seed and makes it
+// active. Returns the new board.
+func (w *Workspace) AddBoard(name string) *Board {
+	if name == "" {
+		name = "board " + intToStr(len(w.Boards)+1)
+	}
+	b := &Board{
+		Name:      name,
+		GrainSeed: time.Now().UnixNano(),
+	}
+	w.Boards = append(w.Boards, b)
+	w.ActiveIdx = len(w.Boards) - 1
+	return b
+}
+
+// DeleteBoard removes the board at index i. Refuses to delete the last
+// remaining board.
+func (w *Workspace) DeleteBoard(i int) bool {
+	if len(w.Boards) <= 1 || i < 0 || i >= len(w.Boards) {
+		return false
+	}
+	w.Boards = append(w.Boards[:i], w.Boards[i+1:]...)
+	if w.ActiveIdx >= len(w.Boards) {
+		w.ActiveIdx = len(w.Boards) - 1
+	}
+	return true
+}
+
+func intToStr(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	digits := make([]byte, 0, 8)
+	for n > 0 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+		n /= 10
+	}
+	if neg {
+		digits = append([]byte{'-'}, digits...)
+	}
+	return string(digits)
 }
 
 // ApplyGlobalBorder syncs the package-level SelBorder with this board's
@@ -421,12 +504,23 @@ type Star struct {
 	Color RGB
 }
 
-// GenStars returns a stable cork-texture for (w,h). Dense ~34% with
-// four tiers: flecks, patches, pores, blotches. (w,h) seeded so stable.
+// GenStars returns a stable cork-texture for (w,h) using the default seed.
+// For per-board grain, use GenStarsForBoard.
 func GenStars(w, h int) []Star {
+	return GenStarsForBoard(w, h, 0)
+}
+
+// GenStarsForBoard returns a cork-texture stable across resizes-of-equal-size
+// AND distinct per `grainSeed`. Row 0 is reserved for the tab bar — no
+// stars are placed there.
+func GenStarsForBoard(w, h int, grainSeed int64) []Star {
 	out := make([]Star, 0, w*h/3)
-	s := uint64(w)*73856093 ^ uint64(h)*19349663 ^ 0x12345678
+	s := uint64(w)*73856093 ^ uint64(h)*19349663 ^ uint64(grainSeed) ^ 0x12345678
 	for y := 0; y < h; y++ {
+		if y == 0 {
+			// reserve top row for tab bar
+			continue
+		}
 		for x := 0; x < w; x++ {
 			s = s*6364136223846793005 + 1442695040888963407
 			n := s >> 33
@@ -453,11 +547,14 @@ func GenStars(w, h int) []Star {
 
 func seedBoard() *Board {
 	now := time.Now().UTC()
-	b := &Board{}
+	b := &Board{
+		Name:      "main",
+		GrainSeed: time.Now().UnixNano(),
+	}
 	// Positions are world-coords at the unit scale (zoom 0).
 	b.Notes = []*Note{
 		{
-			ID: genID(), Title: "welcome", Body: "• drag with the mouse\n• tab cycles\n• enter zooms\n• s pulls a string\n• - = 0 workspace zoom",
+			ID: genID(), Title: "welcome", Body: "• drag with the mouse\n• tab cycles\n• enter zooms\n• s pulls a string\n• > new board   < prev",
 			X: 3, Y: 1, Tint: "yellow", Created: now, Updated: now,
 		},
 		{
@@ -474,4 +571,9 @@ func seedBoard() *Board {
 		b.Connect(b.Notes[0].ID, b.Notes[1].ID)
 	}
 	return b
+}
+
+// seedWorkspace returns a workspace with one seeded "main" board.
+func seedWorkspace() *Workspace {
+	return &Workspace{Boards: []*Board{seedBoard()}}
 }

@@ -1,7 +1,8 @@
 package app
 
-// storage.go — loads and saves the board (notes + strings + text mode)
-// to a JSON file under the XDG data directory, with debounced writes.
+// storage.go — loads and saves the workspace (multiple boards) to a JSON
+// file under the XDG data directory, with debounced writes. Schema v4
+// adds the workspace envelope; v3 single-board files migrate forward.
 
 import (
 	"encoding/json"
@@ -12,13 +13,22 @@ import (
 	"time"
 )
 
-const schemaVersion = 3
+const schemaVersion = 4
 
+// diskFile is the v4 envelope. v3 fields (TextMode, Notes, Strings, Zoom,
+// HighlightColor) are kept here as optional fallbacks — when a v3 file is
+// loaded, those fields are wrapped into a single board.
 type diskFile struct {
-	SchemaVersion int           `json:"schemaVersion"`
-	TextMode      TextStyleMode `json:"textMode,omitempty"`
-	Notes         []*Note       `json:"notes"`
-	Strings       []*StringConn `json:"strings,omitempty"`
+	SchemaVersion int       `json:"schemaVersion"`
+	ActiveIdx     int       `json:"activeIdx,omitempty"`
+	Boards        []*Board  `json:"boards,omitempty"`
+
+	// Legacy v3 fields — read on load, never written.
+	LegacyTextMode       TextStyleMode `json:"textMode,omitempty"`
+	LegacyZoom           int           `json:"zoom,omitempty"`
+	LegacyHighlightColor int           `json:"highlightColor,omitempty"`
+	LegacyNotes          []*Note       `json:"notes,omitempty"`
+	LegacyStrings        []*StringConn `json:"strings,omitempty"`
 }
 
 func DataPath() (string, error) {
@@ -34,9 +44,6 @@ func DataPath() (string, error) {
 		dir = filepath.Join(home, ".local", "share", "redthread")
 		legacyDir = filepath.Join(home, ".local", "share", "brainfartadhdfixerupper")
 	}
-	// Migrate the pre-naming save file once, on first launch under the
-	// new name. If the legacy folder has a notes.json and the new folder
-	// doesn't yet, move the file over.
 	newNotes := filepath.Join(dir, "notes.json")
 	legacyNotes := filepath.Join(legacyDir, "notes.json")
 	if _, err := os.Stat(newNotes); errors.Is(err, os.ErrNotExist) {
@@ -51,7 +58,9 @@ func DataPath() (string, error) {
 	return newNotes, nil
 }
 
-func LoadBoard() (*Board, error) {
+// LoadWorkspace reads notes.json, migrating older schemas on the way in.
+// Returns (nil, nil) when the file simply doesn't exist yet.
+func LoadWorkspace() (*Workspace, error) {
 	path, err := DataPath()
 	if err != nil {
 		return nil, err
@@ -67,27 +76,60 @@ func LoadBoard() (*Board, error) {
 	if err := json.Unmarshal(data, &f); err != nil {
 		return nil, err
 	}
-	// Migrate legacy v2 strings (FromID/ToID → A/B endpoints) in-place.
-	for _, s := range f.Strings {
-		s.normalizeLegacy()
+
+	// v4: workspace with boards.
+	if len(f.Boards) > 0 {
+		ws := &Workspace{Boards: f.Boards, ActiveIdx: f.ActiveIdx}
+		for _, b := range ws.Boards {
+			normalizeLoadedBoard(b)
+		}
+		return ws, nil
 	}
-	b := &Board{Notes: f.Notes, Strings: f.Strings, TextMode: f.TextMode}
-	if len(b.Notes) > 0 {
-		b.Selected = b.Notes[len(b.Notes)-1].ID
+
+	// v3 (or older): single board at the root. Wrap into a workspace.
+	if len(f.LegacyNotes) > 0 {
+		b := &Board{
+			Name:           "main",
+			GrainSeed:      time.Now().UnixNano(),
+			Notes:          f.LegacyNotes,
+			Strings:        f.LegacyStrings,
+			TextMode:       f.LegacyTextMode,
+			Zoom:           f.LegacyZoom,
+			HighlightColor: f.LegacyHighlightColor,
+		}
+		normalizeLoadedBoard(b)
+		return &Workspace{Boards: []*Board{b}}, nil
 	}
-	return b, nil
+
+	// Empty file or unknown shape — let caller seed.
+	return nil, nil
 }
 
-func SaveBoard(b *Board) error {
+func normalizeLoadedBoard(b *Board) {
+	for _, s := range b.Strings {
+		s.normalizeLegacy()
+	}
+	if b.GrainSeed == 0 {
+		b.GrainSeed = time.Now().UnixNano()
+	}
+	if b.Name == "" {
+		b.Name = "main"
+	}
+	if len(b.Notes) > 0 && b.Selected == "" {
+		b.Selected = b.Notes[len(b.Notes)-1].ID
+	}
+}
+
+// SaveWorkspace writes the workspace as a v4 file (workspace envelope).
+func SaveWorkspace(w *Workspace) error {
 	path, err := DataPath()
 	if err != nil {
 		return err
 	}
 	f := diskFile{
 		SchemaVersion: schemaVersion,
-		TextMode:      b.TextMode,
-		Notes:         b.Notes,
-		Strings:       b.Strings,
+		ActiveIdx:     w.ActiveIdx,
+		Boards:        w.Boards,
 	}
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
@@ -103,14 +145,14 @@ func SaveBoard(b *Board) error {
 // --- debouncer --------------------------------------------------------
 
 type Saver struct {
-	board *Board
+	ws    *Workspace
 	mu    sync.Mutex
 	timer *time.Timer
 	delay time.Duration
 }
 
-func NewSaver(b *Board, delay time.Duration) *Saver {
-	return &Saver{board: b, delay: delay}
+func NewSaver(w *Workspace, delay time.Duration) *Saver {
+	return &Saver{ws: w, delay: delay}
 }
 
 func (s *Saver) Touch() {
@@ -120,7 +162,7 @@ func (s *Saver) Touch() {
 		s.timer.Stop()
 	}
 	s.timer = time.AfterFunc(s.delay, func() {
-		_ = SaveBoard(s.board)
+		_ = SaveWorkspace(s.ws)
 	})
 }
 
@@ -131,5 +173,5 @@ func (s *Saver) Flush() error {
 		s.timer = nil
 	}
 	s.mu.Unlock()
-	return SaveBoard(s.board)
+	return SaveWorkspace(s.ws)
 }

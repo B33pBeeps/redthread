@@ -1,7 +1,7 @@
 package app
 
-// app.go — top-level entry. Loads board (or seeds a fresh one), launches
-// the Bubble Tea program with alt-screen + full mouse motion.
+// app.go — top-level entry. Loads workspace (or seeds a fresh one) and
+// launches the Bubble Tea program.
 
 import (
 	"flag"
@@ -14,27 +14,29 @@ import (
 // Run is the package's main entry point. cmd/redthread/main.go calls it.
 func Run() {
 	var fresh bool
-	flag.BoolVar(&fresh, "fresh", false, "start with a fresh seeded board, ignore saved notes")
+	flag.BoolVar(&fresh, "fresh", false, "start with a fresh seeded workspace, ignore saved notes")
 	flag.Parse()
 
-	var board *Board
+	var ws *Workspace
 	if !fresh {
-		b, err := LoadBoard()
+		w, err := LoadWorkspace()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not load notes (%v) — starting fresh\n", err)
 		}
-		board = b
+		ws = w
 	}
-	if board == nil || len(board.Notes) == 0 {
-		board = seedBoard()
+	if ws == nil || len(ws.Boards) == 0 {
+		ws = seedWorkspace()
 	}
-	board.ApplyGlobalBorder()
+	if active := ws.ActiveBoard(); active != nil {
+		active.ApplyGlobalBorder()
+	}
 
-	m := initialModel(board)
+	m := initialModel(ws)
 	p := tea.NewProgram(m, tea.WithAltScreen(), tea.WithMouseAllMotion())
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	_ = SaveBoard(board)
+	_ = SaveWorkspace(ws)
 }
