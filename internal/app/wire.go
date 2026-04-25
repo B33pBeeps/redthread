@@ -51,15 +51,18 @@ func (p *PullState) Stop() {
 // --- rendering ---------------------------------------------------------
 
 // drawStringsBehind renders only the strings with InFront=false. Called
-// BEFORE notes are drawn so they sit beneath.
-func drawStringsBehind(c *Canvas, b *Board, hoverIdx int) {
-	drawStringSet(c, b, hoverIdx, false)
+// BEFORE notes are drawn so they sit beneath. If `grabID` is non-empty,
+// strings touching that note are SKIPPED here — they get drawn with the
+// in-front pass instead, so the attachment stays visible while dragging.
+func drawStringsBehind(c *Canvas, b *Board, hoverIdx int, grabID string) {
+	drawStringSet(c, b, hoverIdx, false, grabID)
 }
 
-// drawStringsInFront renders strings with InFront=true plus the in-progress
-// pull. Called AFTER notes so they sit on top.
-func drawStringsInFront(c *Canvas, b *Board, pull *PullState, hoverIdx int) {
-	drawStringSet(c, b, hoverIdx, true)
+// drawStringsInFront renders strings with InFront=true plus any string
+// touching the dragged note (so picked-up notes stay visibly attached),
+// plus the in-progress pull. Called AFTER notes so they sit on top.
+func drawStringsInFront(c *Canvas, b *Board, pull *PullState, hoverIdx int, grabID string) {
+	drawStringSet(c, b, hoverIdx, true, grabID)
 	if pull != nil && pull.Active {
 		from := b.FindNote(pull.FromID)
 		if from != nil {
@@ -73,11 +76,11 @@ func drawStringsInFront(c *Canvas, b *Board, pull *PullState, hoverIdx int) {
 	}
 }
 
-// drawAllStrings is the legacy combined renderer (still used by the
-// edit-mode backdrop where draw order is just one pass).
+// drawAllStrings is the legacy combined renderer (used by the edit-mode
+// backdrop where draw order is just one pass).
 func drawAllStrings(c *Canvas, b *Board, pull *PullState, hoverIdx int) {
-	drawStringSet(c, b, hoverIdx, false)
-	drawStringSet(c, b, hoverIdx, true)
+	drawStringSet(c, b, hoverIdx, false, "")
+	drawStringSet(c, b, hoverIdx, true, "")
 	if pull != nil && pull.Active {
 		from := b.FindNote(pull.FromID)
 		if from != nil {
@@ -91,11 +94,17 @@ func drawAllStrings(c *Canvas, b *Board, pull *PullState, hoverIdx int) {
 	}
 }
 
-// drawStringSet is the shared inner loop — draws all strings whose
-// InFront matches `inFront`.
-func drawStringSet(c *Canvas, b *Board, hoverIdx int, inFront bool) {
+// drawStringSet is the shared inner loop. It draws strings whose
+// effective in-front layer matches `inFront`. If `grabID` is set, any
+// string touching that note is forced to the in-front layer so a
+// picked-up note's attachments stay visible on top.
+func drawStringSet(c *Canvas, b *Board, hoverIdx int, inFront bool, grabID string) {
 	for i, s := range b.Strings {
-		if s.InFront != inFront {
+		effectiveInFront := s.InFront
+		if grabID != "" && s.InvolvesNote(grabID) {
+			effectiveInFront = true
+		}
+		if effectiveInFront != inFront {
 			continue
 		}
 		ax, ay, aok := s.A.Pos(b)

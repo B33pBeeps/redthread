@@ -153,7 +153,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case TransitionOut:
 				m.mode = ModeBoard
 				if n := m.findNote(m.transition.NoteID); n != nil {
-					n.Bob = 1.2
+					// Jiggle on landing — bigger than a cycle bounce so
+					// the note feels like it just "thudded" back home.
+					n.Bob = 2.0
+					n.BobX = 0.7
+					n.Flash = 0.5
 				}
 			}
 			m.transition = nil
@@ -533,6 +537,9 @@ func (m *model) cycleHoverStr(delta int) {
 func (m model) flashSel() (tea.Model, tea.Cmd) {
 	if n := m.board.Selection(); n != nil {
 		n.Flash = 0.8
+		// Small jiggle so cycling with tab/S-tab feels tactile.
+		n.Bob = 1.4
+		n.BobX = 0.6
 	}
 	return m, nil
 }
@@ -748,8 +755,10 @@ func (m model) overlayFontMenuOnString(base string) string {
 func (m model) drawBoardView(c *Canvas) {
 	drawCork(c, m.stars)
 
-	// 1) Behind-strings first (under notes)
-	drawStringsBehind(c, m.board, m.hoverStr)
+	// 1) Behind-strings first (under notes). Strings touching the
+	//    grabbed note are skipped here and drawn on top in step 3 so
+	//    the attachment stays visible while dragging.
+	drawStringsBehind(c, m.board, m.hoverStr, m.grabID)
 
 	// 2) Notes (back-to-front, skipping grabbed so we can draw it on top)
 	for _, n := range m.board.Notes {
@@ -766,8 +775,9 @@ func (m model) drawBoardView(c *Canvas) {
 		}
 	}
 
-	// 3) In-front-strings + active pull overlay (over notes)
-	drawStringsInFront(c, m.board, &m.pull, m.hoverStr)
+	// 3) In-front-strings + strings touching the grabbed note + the
+	//    active pull overlay.
+	drawStringsInFront(c, m.board, &m.pull, m.hoverStr, m.grabID)
 }
 
 // drawTransitionView — clean 3D zoom with an animated backdrop fade.
@@ -784,7 +794,7 @@ func (m model) drawTransitionView(c *Canvas) {
 	// Base board (cork + background notes + strings) — drawn first, then
 	// dimmed together so the fade feels unified.
 	drawCork(c, m.stars)
-	drawStringsBehind(c, m.board, -1)
+	drawStringsBehind(c, m.board, -1, "")
 	focusID := m.transition.NoteID
 	for _, n := range m.board.Notes {
 		if n.ID == focusID {
@@ -793,7 +803,7 @@ func (m model) drawTransitionView(c *Canvas) {
 		drawShadow(c, n, m.board.Zoom)
 		drawNote(c, n, false, m.board.TextMode, m.board.Zoom)
 	}
-	drawStringsInFront(c, m.board, nil, -1)
+	drawStringsInFront(c, m.board, nil, -1, "")
 
 	// Animated fade: 1.0 (no dim) → 0.38 (edit-mode dim).
 	const editDim = float32(0.38)
