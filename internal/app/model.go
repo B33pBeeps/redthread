@@ -61,6 +61,9 @@ type model struct {
 	toast      string
 	toastUntil time.Time
 
+	// "press D again" arm window for board deletion
+	deleteArmedUntil time.Time
+
 	mouseX, mouseY int
 }
 
@@ -291,6 +294,24 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		if m.board != nil {
 			m.renaming = true
 			m.renameBuffer = m.board.Name
+		}
+		return m, nil
+	case "D":
+		// Two-press delete with a ~2s arm window. First press warns;
+		// second press (within the window) actually deletes.
+		if m.now.Before(m.deleteArmedUntil) {
+			name := m.board.Name
+			if m.workspace.DeleteBoard(m.workspace.ActiveIdx) {
+				m.refreshActive()
+				m.saver.Touch()
+				m.setToast("deleted board: " + name)
+			} else {
+				m.setToast("can't delete the last board")
+			}
+			m.deleteArmedUntil = time.Time{}
+		} else {
+			m.deleteArmedUntil = m.now.Add(2 * time.Second)
+			m.setToast("press D again to delete '" + m.board.Name + "'")
 		}
 		return m, nil
 	case "?":
@@ -925,6 +946,7 @@ var helpData = []helpColumn{
 		{"<", "prev"},
 		{"B", "new"},
 		{"R", "rename"},
+		{"D", "delete"},
 	}},
 	{"VIEW", []helpEntry{
 		{"-/=/0", "zoom"},
