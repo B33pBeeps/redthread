@@ -44,7 +44,11 @@ type model struct {
 	lastClickT time.Time
 	lastClickN string
 
-	showHelp bool
+	// help panel: slides up from the bottom when toggled with `?`.
+	// helpTarget is 0 (closed) or 1 (open); helpAnim eases toward target.
+	helpAnim   float32
+	helpTarget float32
+
 	fontMenu *FontMenu
 
 	// transient status message shown in the footer
@@ -98,6 +102,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.pull.Tick()
+		// help panel ease toward target
+		if m.helpTarget != m.helpAnim {
+			diff := m.helpTarget - m.helpAnim
+			m.helpAnim += diff * 0.22
+			if absF(diff) < 0.005 {
+				m.helpAnim = m.helpTarget
+			}
+		}
 		if m.transition != nil && m.transition.Done(m.now) {
 			switch m.transition.Mode {
 			case TransitionIn:
@@ -183,7 +195,12 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		_ = m.saver.Flush()
 		return m, tea.Quit
 	case "?":
-		m.showHelp = !m.showHelp
+		// Toggle the bottom-anchored help panel; tick eases the height.
+		if m.helpTarget < 0.5 {
+			m.helpTarget = 1
+		} else {
+			m.helpTarget = 0
+		}
 		return m, nil
 	case "a":
 		m.fontMenu = NewFontMenu(m.board.TextMode)
@@ -591,8 +608,8 @@ func (m model) View() string {
 		m.drawBoardView(c)
 	}
 	m.drawFooterView(c)
-	if m.showHelp && m.mode == ModeBoard && m.transition == nil {
-		m.drawHelpOverlay(c)
+	if m.helpAnim > 0.001 {
+		drawHelpPanel(c, m.helpAnim)
 	}
 	if m.fontMenu != nil {
 		drawFontMenu(c, m.fontMenu)
@@ -701,45 +718,120 @@ func (m model) drawFooterView(c *Canvas) {
 	drawFooter(c, text)
 }
 
-func (m model) drawHelpOverlay(c *Canvas) {
-	lines := []string{
-		" ▸ mouse drag to move a note (drop bounces)",
-		" ▸ tab / shift+tab: cycle selection",
-		" ▸ arrows / hjkl: nudge (with bounce)",
-		" ▸ shift+arrows: big nudge",
-		" ▸ enter: zoom-to-edit",
-		" ▸ n new  d delete  r raise",
-		" ▸ 1-9: pick tint (yellow pink blue green purple orange teal cream coral)",
-		" ▸ c: cycle highlight (border) color",
-		" ▸ a: font menu (side popup, live preview)",
-		" ▸ - / =: zoom out / in    0: reset zoom",
-		" ▸ s: pull a string (click note or empty cork)",
-		" ▸ [ / ]: cycle hovered string",
-		" ▸ t: toggle tight on hovered string",
-		" ▸ f: toggle hovered string in-front / behind",
-		" ▸ x: cut the hovered string",
-		" ▸ X: cut all strings on selected note",
-		" ▸ ?: toggle help    q/ctrl+c: quit",
+// --- help panel (bottom slide-up) -------------------------------------
+
+// helpPanelMaxH is the height the panel reaches when fully open.
+const helpPanelMaxH = 9
+
+// helpRowsByGroup is a 4-column layout: NAV / NOTES / STRINGS / VIEW.
+// Each entry is one full-width row drawn inside the panel. The LAST row
+// in the slice sits closest to the panel's bottom edge during animation,
+// and earlier rows reveal as the panel grows upward.
+var helpRowsByGroup = []string{
+	" NAVIGATE        NOTES               STRINGS              VIEW",
+	" drag    move    enter   zoom-edit   s     pull           -/=/0  zoom",
+	" click   select  n d r   new/del/raise [ ] cycle hovered  a      font menu",
+	" dblclk  zoom    1-9     tint         t     tight/slack   c      cycle highlight",
+	" tab     next    shift+arrows = big   f     front/behind  ?      toggle this",
+	" arrows  nudge   hjkl    nudge        x     cut hovered   q      quit",
+	"                                      X     cut all",
+}
+
+// drawHelpPanel renders a bordered panel at the bottom of the canvas
+// (above the always-on footer at row c.H-1). `panelH` is its current
+// height — animated by m.helpAnim ticking 0..helpPanelMaxH.
+func drawHelpPanel(c *Canvas, anim float32) {
+	panelH := int(anim*float32(helpPanelMaxH) + 0.5)
+	if panelH <= 0 {
+		return
 	}
-	w := 52
-	h := len(lines) + 4
-	x := (c.W - w) / 2
-	y := (c.H - h) / 2
-	c.BlankRect(x, y, w, h)
-	for dx := 0; dx < w; dx++ {
-		c.SetRune(x+dx, y, '─', DimText, 0)
-		c.SetRune(x+dx, y+h-1, '─', DimText, 0)
+	if panelH > c.H-2 {
+		panelH = c.H - 2
 	}
-	for dy := 0; dy < h; dy++ {
-		c.SetRune(x, y+dy, '│', DimText, 0)
-		c.SetRune(x+w-1, y+dy, '│', DimText, 0)
+	if panelH < 2 {
+		// at minimum show a thin top edge so the slide feels continuous
+		panelH = 2
 	}
-	c.SetRune(x, y, '╭', DimText, 0)
-	c.SetRune(x+w-1, y, '╮', DimText, 0)
-	c.SetRune(x, y+h-1, '╰', DimText, 0)
-	c.SetRune(x+w-1, y+h-1, '╯', DimText, 0)
-	c.WriteText(x+2, y+1, "help", PinRed, AttrBold)
-	for i, line := range lines {
-		c.WriteText(x+2, y+2+i, line, DimText, 0)
+
+	panelW := c.W
+	maxW := 100
+	if panelW > maxW {
+		panelW = maxW
+	}
+	panelX := (c.W - panelW) / 2
+	bottomY := c.H - 2 // last row of panel (row above the footer)
+	topY := bottomY - panelH + 1
+	if topY < 0 {
+		topY = 0
+	}
+
+	// Clear panel area
+	for dy := 0; dy < panelH; dy++ {
+		for dx := 0; dx < panelW; dx++ {
+			c.SetBlank(panelX+dx, topY+dy)
+		}
+	}
+
+	// Top border + title
+	for dx := 0; dx < panelW; dx++ {
+		x := panelX + dx
+		var r rune
+		switch {
+		case dx == 0:
+			r = '╭'
+		case dx == panelW-1:
+			r = '╮'
+		default:
+			r = '─'
+		}
+		c.SetRune(x, topY, r, Footer, 0)
+	}
+	if panelW > 12 {
+		c.WriteText(panelX+2, topY, " help ", DimText, AttrBold)
+	}
+
+	// Bottom border (only if panel has 2+ rows)
+	if panelH >= 2 {
+		for dx := 0; dx < panelW; dx++ {
+			x := panelX + dx
+			var r rune
+			switch {
+			case dx == 0:
+				r = '╰'
+			case dx == panelW-1:
+				r = '╯'
+			default:
+				r = '─'
+			}
+			c.SetRune(x, bottomY, r, Footer, 0)
+		}
+	}
+
+	// Side borders
+	for dy := 1; dy < panelH-1; dy++ {
+		c.SetRune(panelX, topY+dy, '│', Footer, 0)
+		c.SetRune(panelX+panelW-1, topY+dy, '│', Footer, 0)
+	}
+
+	// Content rows. The LAST helpRowsByGroup entry sits at bottomY-1;
+	// earlier entries are above it. Anything that would land on or above
+	// the top border row gets clipped (so during animation, content
+	// reveals from the bottom up).
+	contentTop := topY + 1
+	contentBot := bottomY - 1
+	total := len(helpRowsByGroup)
+	for i, row := range helpRowsByGroup {
+		rowY := contentBot - (total - 1 - i)
+		if rowY < contentTop || rowY > contentBot {
+			continue
+		}
+		// Highlight the column-headers row in a brighter tone
+		col := DimText
+		attr := uint8(0)
+		if i == 0 {
+			col = Flash
+			attr = AttrBold
+		}
+		c.WriteText(panelX+2, rowY, row, col, attr)
 	}
 }
