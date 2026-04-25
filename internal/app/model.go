@@ -697,7 +697,6 @@ func (m model) drawTransitionView(c *Canvas) {
 }
 
 func (m model) drawFooterView(c *Canvas) {
-	var text string
 	// Transient toast takes priority when active.
 	if !m.toastUntil.IsZero() && m.now.Before(m.toastUntil) {
 		drawFooter(c, m.toast)
@@ -705,133 +704,209 @@ func (m model) drawFooterView(c *Canvas) {
 	}
 	switch {
 	case m.fontMenu != nil:
-		text = "↑↓ preview  •  enter set  •  esc cancel"
+		drawFooter(c, "↑↓ preview  •  enter set  •  esc cancel")
+		return
 	case m.pull.Active:
-		text = "pull mode • click note to connect • click empty cork for wall-pin • esc cancel"
+		drawFooter(c, "pull mode • click note to connect • click empty cork for wall-pin • esc cancel")
+		return
 	case m.transition != nil:
-		text = "…"
+		drawFooter(c, "…")
+		return
 	case m.mode == ModeEdit:
-		text = "esc: place back  •  ctrl+s: save"
-	default:
-		text = "drag • n/d/r • tab • enter zoom • s pull • [ ] t f x • a font • -/=/0 zoom • 1-9 tint • c highlight • ? help • q"
+		drawFooter(c, "esc: place back  •  ctrl+s: save")
+		return
 	}
-	drawFooter(c, text)
+	// Default: a quiet "? help" tucked into the bottom-right. Hidden
+	// when the help panel is already open (no need for the nudge).
+	y := c.H - 1
+	for x := 0; x < c.W; x++ {
+		c.SetBlank(x, y)
+	}
+	if m.helpAnim < 0.5 {
+		hint := "? help"
+		c.WriteText(c.W-runeLen(hint)-1, y, hint, Footer, 0)
+	}
 }
 
 // --- help panel (bottom slide-up) -------------------------------------
 
-// helpPanelMaxH is the height the panel reaches when fully open.
-const helpPanelMaxH = 9
+// helpEntry is one (key, description) row inside a help column.
+type helpEntry struct{ key, desc string }
 
-// helpRowsByGroup is a 4-column layout: NAV / NOTES / STRINGS / VIEW.
-// Each entry is one full-width row drawn inside the panel. The LAST row
-// in the slice sits closest to the panel's bottom edge during animation,
-// and earlier rows reveal as the panel grows upward.
-var helpRowsByGroup = []string{
-	" NAVIGATE        NOTES               STRINGS              VIEW",
-	" drag    move    enter   zoom-edit   s     pull           -/=/0  zoom",
-	" click   select  n d r   new/del/raise [ ] cycle hovered  a      font menu",
-	" dblclk  zoom    1-9     tint         t     tight/slack   c      cycle highlight",
-	" tab     next    shift+arrows = big   f     front/behind  ?      toggle this",
-	" arrows  nudge   hjkl    nudge        x     cut hovered   q      quit",
-	"                                      X     cut all",
+// helpColumn is a labeled vertical group of entries.
+type helpColumn struct {
+	title   string
+	entries []helpEntry
 }
 
-// drawHelpPanel renders a bordered panel at the bottom of the canvas
-// (above the always-on footer at row c.H-1). `panelH` is its current
-// height — animated by m.helpAnim ticking 0..helpPanelMaxH.
+// helpData drives the panel. Columns are rendered side-by-side; each
+// column's keys and descriptions are aligned to fixed widths derived
+// from the longest item, so columns never drift.
+var helpData = []helpColumn{
+	{"NAVIGATE", []helpEntry{
+		{"drag", "move"},
+		{"click", "select"},
+		{"dblclk", "zoom"},
+		{"tab", "next"},
+	}},
+	{"NOTES", []helpEntry{
+		{"enter", "zoom-edit"},
+		{"n", "new"},
+		{"d", "delete"},
+		{"1-9", "tint"},
+	}},
+	{"STRINGS", []helpEntry{
+		{"s", "pull"},
+		{"[ ]", "cycle"},
+		{"t", "tight/slack"},
+		{"f", "front/behind"},
+		{"x", "cut"},
+	}},
+	{"VIEW", []helpEntry{
+		{"-/=/0", "zoom"},
+		{"a", "font menu"},
+		{"c", "cycle highlight"},
+		{"?", "toggle this"},
+		{"q", "quit"},
+	}},
+}
+
+// drawHelpPanel renders the bordered slide-up panel. anim ∈ [0,1]
+// controls its height. Columns are rendered at fixed x-offsets so all
+// keys/descriptions align visually regardless of their text length.
 func drawHelpPanel(c *Canvas, anim float32) {
-	panelH := int(anim*float32(helpPanelMaxH) + 0.5)
-	if panelH <= 0 {
+	if anim <= 0 || c.H < 4 {
 		return
+	}
+
+	// Per-column widths.
+	keyW := make([]int, len(helpData))
+	descW := make([]int, len(helpData))
+	for i, col := range helpData {
+		kw := runeLen(col.title)
+		dw := 0
+		for _, e := range col.entries {
+			if runeLen(e.key) > kw {
+				kw = runeLen(e.key)
+			}
+			if runeLen(e.desc) > dw {
+				dw = runeLen(e.desc)
+			}
+		}
+		keyW[i] = kw
+		descW[i] = dw
+	}
+	const colGap = 4 // horizontal space between columns
+	const keyDescGap = 1
+	colTotal := make([]int, len(helpData))
+	contentW := 0
+	for i := range helpData {
+		colTotal[i] = keyW[i] + keyDescGap + descW[i]
+		contentW += colTotal[i]
+		if i < len(helpData)-1 {
+			contentW += colGap
+		}
+	}
+
+	maxRows := 0
+	for _, col := range helpData {
+		if len(col.entries) > maxRows {
+			maxRows = len(col.entries)
+		}
+	}
+	fullContentRows := 1 + maxRows // header + entries
+	fullPanelH := fullContentRows + 2
+
+	panelH := int(anim*float32(fullPanelH) + 0.5)
+	if panelH > fullPanelH {
+		panelH = fullPanelH
 	}
 	if panelH > c.H-2 {
 		panelH = c.H - 2
 	}
 	if panelH < 2 {
-		// at minimum show a thin top edge so the slide feels continuous
-		panelH = 2
+		panelH = 2 // a thin top edge during fade
 	}
 
-	panelW := c.W
-	maxW := 100
-	if panelW > maxW {
-		panelW = maxW
+	panelW := contentW + 6 // 1 border + 2 padding each side
+	if panelW > c.W {
+		panelW = c.W
+	}
+	if panelW < 30 {
+		panelW = 30
 	}
 	panelX := (c.W - panelW) / 2
-	bottomY := c.H - 2 // last row of panel (row above the footer)
+	bottomY := c.H - 2
 	topY := bottomY - panelH + 1
 	if topY < 0 {
 		topY = 0
 	}
 
-	// Clear panel area
+	// Clear interior.
 	for dy := 0; dy < panelH; dy++ {
 		for dx := 0; dx < panelW; dx++ {
 			c.SetBlank(panelX+dx, topY+dy)
 		}
 	}
 
-	// Top border + title
-	for dx := 0; dx < panelW; dx++ {
-		x := panelX + dx
-		var r rune
-		switch {
-		case dx == 0:
-			r = '╭'
-		case dx == panelW-1:
-			r = '╮'
-		default:
-			r = '─'
+	// Borders.
+	drawHB := func(y int, left, right rune) {
+		for dx := 0; dx < panelW; dx++ {
+			r := '─'
+			switch dx {
+			case 0:
+				r = left
+			case panelW - 1:
+				r = right
+			}
+			c.SetRune(panelX+dx, y, r, Footer, 0)
 		}
-		c.SetRune(x, topY, r, Footer, 0)
+	}
+	drawHB(topY, '╭', '╮')
+	if panelH >= 2 {
+		drawHB(bottomY, '╰', '╯')
+	}
+	for dy := 1; dy < panelH-1; dy++ {
+		c.SetRune(panelX, topY+dy, '│', Footer, 0)
+		c.SetRune(panelX+panelW-1, topY+dy, '│', Footer, 0)
 	}
 	if panelW > 12 {
 		c.WriteText(panelX+2, topY, " help ", DimText, AttrBold)
 	}
 
-	// Bottom border (only if panel has 2+ rows)
-	if panelH >= 2 {
-		for dx := 0; dx < panelW; dx++ {
-			x := panelX + dx
-			var r rune
-			switch {
-			case dx == 0:
-				r = '╰'
-			case dx == panelW-1:
-				r = '╯'
-			default:
-				r = '─'
-			}
-			c.SetRune(x, bottomY, r, Footer, 0)
-		}
+	// Column x-offsets.
+	colX := make([]int, len(helpData))
+	cur := panelX + 3 // 1 border + 2 padding
+	for i := range helpData {
+		colX[i] = cur
+		cur += colTotal[i] + colGap
 	}
 
-	// Side borders
-	for dy := 1; dy < panelH-1; dy++ {
-		c.SetRune(panelX, topY+dy, '│', Footer, 0)
-		c.SetRune(panelX+panelW-1, topY+dy, '│', Footer, 0)
-	}
-
-	// Content rows. The LAST helpRowsByGroup entry sits at bottomY-1;
-	// earlier entries are above it. Anything that would land on or above
-	// the top border row gets clipped (so during animation, content
-	// reveals from the bottom up).
 	contentTop := topY + 1
 	contentBot := bottomY - 1
-	total := len(helpRowsByGroup)
-	for i, row := range helpRowsByGroup {
-		rowY := contentBot - (total - 1 - i)
+	// Layout assuming full panel: header sits N rows above contentBot.
+	// Anything that lands above contentTop gets clipped — that's the
+	// reveal-from-bottom-up animation.
+	headerY := contentBot - maxRows
+
+	if headerY >= contentTop && headerY <= contentBot {
+		for i, col := range helpData {
+			c.WriteText(colX[i], headerY, col.title, Flash, AttrBold)
+		}
+	}
+	for r := 0; r < maxRows; r++ {
+		rowY := headerY + 1 + r
 		if rowY < contentTop || rowY > contentBot {
 			continue
 		}
-		// Highlight the column-headers row in a brighter tone
-		col := DimText
-		attr := uint8(0)
-		if i == 0 {
-			col = Flash
-			attr = AttrBold
+		for i, col := range helpData {
+			if r >= len(col.entries) {
+				continue
+			}
+			e := col.entries[r]
+			c.WriteText(colX[i], rowY, e.key, DimText, AttrBold)
+			descX := colX[i] + keyW[i] + keyDescGap
+			c.WriteText(descX, rowY, e.desc, DimText, 0)
 		}
-		c.WriteText(panelX+2, rowY, row, col, attr)
 	}
 }
