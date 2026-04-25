@@ -753,7 +753,7 @@ var helpData = []helpColumn{
 	{"KEYS", []helpEntry{
 		{"arrows", "nudge"},
 		{"hjkl", "nudge"},
-		{"S-arr", "nudge ×5"},
+		{"S-arr", "big nudge"},
 		{"tab", "next"},
 		{"S-tab", "prev"},
 	}},
