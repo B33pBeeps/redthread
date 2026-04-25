@@ -174,4 +174,4 @@ what the board looks like at default zoom:
 
 ## License
 
-Personal project. MIT-friendly — use it, fork it, whatever.
+Personal project. MIT-friendly — use it, fork it, do whatever.
