@@ -195,6 +195,27 @@ func (c *Canvas) WriteText(x, y int, s string, fg RGB, attr uint8) {
 	}
 }
 
+// BlitAt copies every cell from `src` into this canvas at offset (dx, dy).
+// Cells that fall outside this canvas are clipped. Source-empty cells
+// (Rune == 0 && Fg == nil) overwrite the destination just the same — the
+// caller is expected to pass a freshly-allocated dst canvas if it wants
+// the off-screen area to read as terminal default.
+func (c *Canvas) BlitAt(src *Canvas, dx, dy int) {
+	for sy := 0; sy < src.H; sy++ {
+		ty := sy + dy
+		if ty < 0 || ty >= c.H {
+			continue
+		}
+		for sx := 0; sx < src.W; sx++ {
+			tx := sx + dx
+			if tx < 0 || tx >= c.W {
+				continue
+			}
+			c.cells[ty*c.W+tx] = src.cells[sy*src.W+sx]
+		}
+	}
+}
+
 // Dim applies a multiplier to every cell's foreground color, preserving
 // transparency on bare cells. Used for blurring the backdrop during edit.
 func (c *Canvas) Dim(f float32) {

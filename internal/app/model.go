@@ -51,6 +51,14 @@ type model struct {
 	helpAnim   float32
 	helpTarget float32
 
+	// Board-switch crossfade. While boardAnimFrom != nil, the previous
+	// board's content fades out (with its own cork grain), then the new
+	// active board fades in. Driven by tick.
+	boardAnim         float32
+	boardAnimFrom     *Board
+	boardAnimOldStars []Star
+	boardAnimDir      int
+
 	fontMenu *FontMenu
 
 	// rename mode: when true, keystrokes edit renameBuffer until enter/esc.
@@ -77,6 +85,21 @@ func initialModel(ws *Workspace) model {
 		hoverStr:  -1,
 	}
 	return m
+}
+
+// startBoardAnim captures the current board + its stars as the "from"
+// frame of a board-switch crossfade. Call it BEFORE mutating the
+// workspace's active index. Cancels any in-flight pull (otherwise the
+// pull state would dangle on a board that's no longer rendered).
+func (m *model) startBoardAnim(dir int) {
+	if m.board == nil {
+		return
+	}
+	m.boardAnimFrom = m.board
+	m.boardAnimOldStars = m.stars
+	m.boardAnim = 0
+	m.boardAnimDir = dir
+	m.pull.Stop()
 }
 
 // refreshActive points m.board at the workspace's current active board
@@ -141,6 +164,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.helpAnim += diff * 0.28
 			if absF(diff) < 0.02 {
 				m.helpAnim = m.helpTarget
+			}
+		}
+		// Board-switch crossfade advance. ~17 ticks (~270ms) end-to-end.
+		if m.boardAnimFrom != nil {
+			m.boardAnim += 0.06
+			if m.boardAnim >= 1.0 {
+				m.boardAnim = 1.0
+				m.boardAnimFrom = nil
+				m.boardAnimOldStars = nil
 			}
 		}
 		if m.transition != nil && m.transition.Done(m.now) {
@@ -272,6 +304,7 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case ">", ".":
 		// Next board
+		m.startBoardAnim(+1)
 		m.workspace.CycleActive(1)
 		m.refreshActive()
 		m.saver.Touch()
@@ -279,6 +312,7 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "<", ",":
 		// Previous board
+		m.startBoardAnim(-1)
 		m.workspace.CycleActive(-1)
 		m.refreshActive()
 		m.saver.Touch()
@@ -286,6 +320,7 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "B":
 		// Create a new board with a unique grain seed.
+		m.startBoardAnim(+1)
 		nb := m.workspace.AddBoard("")
 		m.refreshActive()
 		m.saver.Touch()
@@ -305,12 +340,16 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		// second press (within the window) actually deletes.
 		if m.now.Before(m.deleteArmedUntil) {
 			name := m.board.Name
+			m.startBoardAnim(0)
 			if m.workspace.DeleteBoard(m.workspace.ActiveIdx) {
 				m.refreshActive()
 				m.saver.Touch()
 				m.setToast("deleted board: " + name)
 			} else {
 				m.setToast("can't delete the last board")
+				// abort the animation we just started — nothing changed
+				m.boardAnimFrom = nil
+				m.boardAnimOldStars = nil
 			}
 			m.deleteArmedUntil = time.Time{}
 		} else {
@@ -763,31 +802,57 @@ func (m model) overlayFontMenuOnString(base string) string {
 }
 
 func (m model) drawBoardView(c *Canvas) {
-	drawCork(c, m.stars)
+	// While a board-switch crossfade is in flight: render the relevant
+	// board into a sub-canvas, dim it, and blit it back at a horizontal
+	// offset that slides off-screen on the way out and slides in from
+	// the opposite side on the way in. The direction matches the cycle
+	// (>: old slides left, new arrives from right; <: opposite).
+	if m.boardAnimFrom != nil {
+		const slideMax = 8 // cells of horizontal travel
+		sub := NewCanvas(c.W, c.H)
+		if m.boardAnim < 0.5 {
+			local := easeInOutCubic(m.boardAnim * 2)
+			drawBoardSnapshot(sub, m.boardAnimFrom, m.boardAnimOldStars,
+				"", -1, nil, nil)
+			sub.Dim(1.0 - 0.85*local)
+			ox := -m.boardAnimDir * int(local*slideMax+0.5)
+			c.BlitAt(sub, ox, 0)
+		} else {
+			local := easeInOutCubic((m.boardAnim - 0.5) * 2)
+			drawBoardSnapshot(sub, m.board, m.stars,
+				m.grabID, m.hoverStr, &m.pull, nil)
+			sub.Dim(0.15 + 0.85*local)
+			ox := m.boardAnimDir * int((1-local)*slideMax+0.5)
+			c.BlitAt(sub, ox, 0)
+		}
+		return
+	}
+	drawBoardSnapshot(c, m.board, m.stars,
+		m.grabID, m.hoverStr, &m.pull, nil)
+}
 
-	// 1) Behind-strings first (under notes). Strings touching the
-	//    grabbed note are skipped here and drawn on top in step 3 so
-	//    the attachment stays visible while dragging.
-	drawStringsBehind(c, m.board, m.hoverStr, m.grabID, nil)
-
-	// 2) Notes (back-to-front, skipping grabbed so we can draw it on top)
-	for _, n := range m.board.Notes {
-		if n.ID == m.grabID {
+// drawBoardSnapshot renders one full board's content (cork + strings +
+// notes) at full brightness. Apply Dim() afterwards if you want a fade.
+// Used by both the live render and the crossfade halves.
+func drawBoardSnapshot(c *Canvas, board *Board, stars []Star,
+	grabID string, hoverIdx int, pull *PullState, override *PinOverride,
+) {
+	drawCork(c, stars)
+	drawStringsBehind(c, board, hoverIdx, grabID, override)
+	for _, n := range board.Notes {
+		if n.ID == grabID {
 			continue
 		}
-		drawShadow(c, n, m.board.Zoom)
-		drawNote(c, n, n.ID == m.board.Selected, m.board.TextMode, m.board.Zoom)
+		drawShadow(c, n, board.Zoom)
+		drawNote(c, n, n.ID == board.Selected, board.TextMode, board.Zoom)
 	}
-	if m.grabID != "" {
-		if n := m.findNote(m.grabID); n != nil {
-			drawShadow(c, n, m.board.Zoom)
-			drawNote(c, n, true, m.board.TextMode, m.board.Zoom)
+	if grabID != "" {
+		if n := board.FindNote(grabID); n != nil {
+			drawShadow(c, n, board.Zoom)
+			drawNote(c, n, true, board.TextMode, board.Zoom)
 		}
 	}
-
-	// 3) In-front-strings + strings touching the grabbed note + the
-	//    active pull overlay.
-	drawStringsInFront(c, m.board, &m.pull, m.hoverStr, m.grabID, nil)
+	drawStringsInFront(c, board, pull, hoverIdx, grabID, override)
 }
 
 // drawTransitionView — clean 3D zoom with an animated backdrop fade.
