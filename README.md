@@ -6,8 +6,6 @@ strings, smooth zoom, and multiple named boards you can switch between.
 
 ![hero](docs/hero.gif)
 
-![screenshot](docs/screenshot.png)
-
 ---
 
 ## What it is
