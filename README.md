@@ -4,6 +4,8 @@ A sticky-note pegboard for your terminal. Mouse-first, keyboard-friendly,
 transparent over your tmux theme. ASCII-textured cork, dangling red
 strings, smooth zoom, and multiple named boards you can switch between.
 
+![hero](docs/hero.gif)
+
 ![screenshot](docs/screenshot.png)
 
 ---
@@ -52,6 +54,33 @@ redthread
 
 First run with no save file gets a small demo board. `redthread --fresh`
 ignores the save and reseeds.
+
+## Demos
+
+### Notes & feel
+
+Click without moving for a small jiggle, drag for a drop bounce, `tab`
+cycles with the same jiggle, `enter` zooms into a card with a smooth 3D
+transition, `esc` lands back with a thud.
+
+![feel](docs/feel.gif)
+
+### Red strings
+
+Pull strings between notes (or to bare cork as wall-pins) — the free end
+swoops behind the cursor with weight. `[ ]` cycles the hovered string;
+`t` toggles tight / slack; `f` toggles in-front-of / behind notes; `x`
+cuts. Strings stay visibly attached when you drag a note.
+
+![strings](docs/strings.gif)
+
+### Boards
+
+Top tab bar shows all boards; each has its own cork grain so they feel
+distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
+`R` renames, `D D` deletes (two-press confirm).
+
+![boards](docs/boards.gif)
 
 ## Controls
 

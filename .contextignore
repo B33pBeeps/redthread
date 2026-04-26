@@ -1,0 +1,4 @@
+# Files and directories to exclude from Contextful context.
+# Uses .gitignore syntax: globs, ** wildcards, ! negation, # comments.
+# Patterns here are layered ON TOP of .gitignore exclusions.
+
