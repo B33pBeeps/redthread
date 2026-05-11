@@ -235,6 +235,32 @@ func (w *Workspace) ActiveBoard() *Board {
 	return w.Boards[w.ActiveIdx]
 }
 
+// MoveActive shifts the active board by `delta` positions in the workspace
+// order (negative = move left, positive = move right). Wraps around. The
+// active index follows the moved board so the tab bar's `●` stays on it.
+// Returns true if a swap happened.
+func (w *Workspace) MoveActive(delta int) bool {
+	n := len(w.Boards)
+	if n < 2 || delta == 0 {
+		return false
+	}
+	src := w.ActiveIdx
+	dst := ((src+delta)%n + n) % n
+	if dst == src {
+		return false
+	}
+	b := w.Boards[src]
+	w.Boards = append(w.Boards[:src], w.Boards[src+1:]...)
+	// dst is in original numbering. After removing src, items at indices
+	// > src shifted left by one. Inserting at `dst` in the new list lands
+	// the moved item at the right final position in both directions and
+	// for the wrap-around cases.
+	tail := append([]*Board{b}, w.Boards[dst:]...)
+	w.Boards = append(w.Boards[:dst], tail...)
+	w.ActiveIdx = dst
+	return true
+}
+
 // CycleActive moves the active index by `delta`, wrapping around.
 func (w *Workspace) CycleActive(delta int) {
 	if len(w.Boards) == 0 {
@@ -371,8 +397,8 @@ func (b *Board) NewNote(screenW, screenH int) *Note {
 	worldY := WorldY(screenCy+offset, b.Zoom)
 	n := &Note{
 		ID:      genID(),
-		Title:   "new note",
-		Body:    "write it here.\nenter to zoom, esc to place back.",
+		Title:   "",
+		Body:    "",
 		X:       worldX,
 		Y:       worldY,
 		Tint:    tint,

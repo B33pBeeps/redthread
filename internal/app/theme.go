@@ -264,20 +264,19 @@ func HalftoneChar(level int) rune {
 type TextStyleMode int
 
 const (
-	TextPlain    TextStyleMode = iota // plain
-	TextBold                          // 𝗕𝗼𝗹𝗱 — math sans-serif bold
-	TextItalic                        // 𝘐𝘵𝘢𝘭𝘪𝘤 — math sans-serif italic
-	TextBoldIt                        // 𝘽𝙤𝙡𝙙 𝙄𝙩 — math sans-serif bold italic
-	TextScript                        // 𝓢𝓬𝓻𝓲𝓹𝓽 — math bold script
-	TextFraktur                       // 𝕱𝖗𝖆𝖐𝖙𝖚𝖗 — math bold fraktur
-	TextDouble                        // 𝔻𝕠𝕦𝕓𝕝𝕖 — math double-struck
-	TextMono                          // 𝙼𝚘𝚗𝚘 — math monospace
-	TextFullWide                      // Ｆｕｌｌ — fullwidth ASCII
+	TextPlain   TextStyleMode = iota // plain
+	TextBold                         // 𝗕𝗼𝗹𝗱 — math sans-serif bold
+	TextItalic                       // 𝘐𝘵𝘢𝘭𝘪𝘤 — math sans-serif italic
+	TextBoldIt                       // 𝘽𝙤𝙡𝙙 𝙄𝙩 — math sans-serif bold italic
+	TextScript                       // 𝓢𝓬𝓻𝓲𝓹𝓽 — math bold script
+	TextFraktur                      // 𝕱𝖗𝖆𝖐𝖙𝖚𝖗 — math bold fraktur
+	TextDouble                       // 𝔻𝕠𝕦𝕓𝕝𝕖 — math double-struck
+	TextMono                         // 𝙼𝚘𝚗𝚘 — math monospace
 )
 
 var TextModes = []TextStyleMode{
 	TextPlain, TextBold, TextItalic, TextBoldIt,
-	TextScript, TextFraktur, TextDouble, TextMono, TextFullWide,
+	TextScript, TextFraktur, TextDouble, TextMono,
 }
 
 func (m TextStyleMode) Name() string {
@@ -296,8 +295,6 @@ func (m TextStyleMode) Name() string {
 		return "double-struck"
 	case TextMono:
 		return "monospace"
-	case TextFullWide:
-		return "fullwidth"
 	default:
 		return "plain"
 	}
@@ -323,6 +320,44 @@ func StyleText(s string, mode TextStyleMode) string {
 	return b.String()
 }
 
+// StyleViewText applies styleRune to a pre-rendered string while passing
+// through ANSI CSI escape sequences untouched. Useful when post-processing
+// the output of a third-party widget (e.g. bubbles/textarea) so the visible
+// glyphs reflect the board's font without breaking cursor highlighting.
+func StyleViewText(s string, mode TextStyleMode) string {
+	if mode == TextPlain {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) * 4)
+	i := 0
+	for i < len(s) {
+		if s[i] == '\x1b' && i+1 < len(s) {
+			j := i + 2
+			for j < len(s) {
+				ch := s[j]
+				if (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') {
+					j++
+					break
+				}
+				j++
+			}
+			b.WriteString(s[i:j])
+			i = j
+			continue
+		}
+		r, size := utf8Decode(s[i:])
+		if size == 0 {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+		b.WriteRune(styleRune(r, mode))
+		i += size
+	}
+	return b.String()
+}
+
 // styleRune — Unicode block offsets:
 //   sans-serif bold:         A..Z=0x1D5D4  a..z=0x1D5EE  0..9=0x1D7EC
 //   sans-serif italic:       A..Z=0x1D608  a..z=0x1D622  (digits: bold)
@@ -332,7 +367,6 @@ func StyleText(s string, mode TextStyleMode) string {
 //   double-struck:           A..Z=0x1D538  a..z=0x1D552  0..9=0x1D7D8
 //     (holes: C H N P Q R Z at BMP: 0x2102 0x210D 0x2115 0x2119 0x211A 0x211D 0x2124)
 //   monospace:               A..Z=0x1D670  a..z=0x1D68A  0..9=0x1D7F6
-//   fullwidth:               A..Z=0xFF21   a..z=0xFF41   0..9=0xFF10
 func styleRune(r rune, mode TextStyleMode) rune {
 	switch mode {
 	case TextBold:
@@ -413,17 +447,6 @@ func styleRune(r rune, mode TextStyleMode) rune {
 			return 0x1D68A + (r - 'a')
 		case r >= '0' && r <= '9':
 			return 0x1D7F6 + (r - '0')
-		}
-	case TextFullWide:
-		switch {
-		case r >= 'A' && r <= 'Z':
-			return 0xFF21 + (r - 'A')
-		case r >= 'a' && r <= 'z':
-			return 0xFF41 + (r - 'a')
-		case r >= '0' && r <= '9':
-			return 0xFF10 + (r - '0')
-		case r == ' ':
-			return 0x3000 // ideographic (fullwidth) space
 		}
 	}
 	return r

@@ -27,9 +27,9 @@ strings, smooth zoom, and multiple named boards you can switch between.
   on a few.
 - **3D zoom-to-edit** — a smooth scale + lift + shadow animation that
   settles into a card with a live textarea.
-- **9 paper tints + 9 highlight colors + 9 text styles** (Unicode math
-  alphabets: plain, bold, italic, script, fraktur, double-struck,
-  monospace, fullwidth, and bold-italic).
+- **9 paper tints + 9 highlight colors + 8 text styles** (Unicode math
+  alphabets: plain, bold, italic, bold-italic, script, fraktur,
+  double-struck, monospace).
 - Persists to `$XDG_DATA_HOME/redthread/notes.json` with debounced writes.
 
 ## Install
@@ -100,11 +100,13 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 | `shift + ← ↑ ↓ →` | nudge ×5 |
 | `enter` | zoom-to-edit |
 | `n` / `d` / `r` | new / delete / raise note |
+| `u` | undo the last delete (single step) |
+| `ctrl+y` / `ctrl+p` | copy / paste the selected note |
 | `1` – `9` | tint the selected note (yellow, pink, blue, green, purple, orange, teal, cream, coral) |
 | `c` | cycle the global highlight (border) color |
 | `a` | open the font menu (live preview, enter to commit, esc to cancel) |
 | `-` / `=` / `0` | zoom out / in / reset (5 levels) |
-| `s` | start pulling a red string from the selected note's pin |
+| `s` | start pulling a red string (arrows/`hjkl` nudge endpoint, `tab` snap to next note, `enter` commit, `esc` cancel) |
 | `[` / `]` | cycle the hovered string |
 | `t` | toggle tight / slack on the hovered string |
 | `f` | toggle in-front-of / behind notes |
@@ -119,6 +121,7 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 |---|---|
 | `>` (or `.`) | next board |
 | `<` (or `,`) | previous board |
+| `{` / `}` | re-order: move the active board left / right (wraps) |
 | `B` | new board (drops you into rename) |
 | `R` | rename the active board |
 | `D` | delete the active board (press twice within 2s; refuses if it's the last one) |
@@ -127,7 +130,9 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 
 | key | action |
 |---|---|
-| typing | edit body (first non-empty line is the title) |
+| typing | edit body (first non-empty line is the title; text renders in the board's font) |
+| `ctrl+y` / `ctrl+p` | copy the note / paste at cursor (system clipboard) |
+| drag mouse | native terminal selection — copy with your terminal's hotkey |
 | `esc` | close + save with reverse transition |
 | `ctrl+s` | save without closing |
 
@@ -202,6 +207,25 @@ docs/
 
 DESIGN.md           early design notes (historical)
 ```
+
+## Changelog
+
+**Latest**
+
+*Fixes*
+- Fullwidth font removed — it never rendered correctly.
+- `}` (move-active-board-right) was a no-op; it now actually shifts the active board.
+- Opening a freshly created blank note no longer drops the cursor two rows below the title.
+
+*Features*
+- New notes start empty (only the initial seed has demo content).
+- Open notes now render in the board's selected font.
+- Strings are fully keyboard-drivable from `s` — arrows / `hjkl` nudge the free end, `tab` snaps to next note, `enter` commits, `esc` cancels.
+- Boards re-orderable in the tab bar with `{` and `}`.
+- Native terminal text selection inside open notes (mouse capture is released in edit mode).
+- `ctrl+y` copies the selected note's text; `ctrl+p` pastes — into the cursor in edit mode, or onto the selected note in board mode.
+- `u` undoes the most recent note delete (restores connected strings too).
+- Subtle dim-crossfade + horizontal slide when switching boards.
 
 ## License
 

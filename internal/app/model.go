@@ -4,10 +4,31 @@ package app
 // editor, font menu, persistence.
 
 import (
+	"strings"
 	"time"
 
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// splitClipboardText parses pasted text into (title, body) the same way the
+// editor's Split does: first line is the title, the rest is the body, with
+// at most one separator blank line consumed.
+func splitClipboardText(s string) (string, string) {
+	lines := strings.SplitN(s, "\n", 2)
+	if len(lines) == 0 {
+		return "", ""
+	}
+	title := strings.TrimSpace(lines[0])
+	if len(lines) == 1 {
+		return title, ""
+	}
+	rest := lines[1]
+	if strings.HasPrefix(rest, "\n") {
+		rest = rest[1:]
+	}
+	return title, rest
+}
 
 type Mode int
 
@@ -73,6 +94,22 @@ type model struct {
 	deleteArmedUntil time.Time
 
 	mouseX, mouseY int
+
+	// Single-step undo for the most recent destructive action. Currently
+	// records note deletes (the note + its touching strings + which board
+	// it lived on). Cleared after a successful undo or when overwritten
+	// by another delete.
+	undoSnap *deleteSnapshot
+}
+
+// deleteSnapshot captures everything needed to revive a deleted note.
+// The board is referenced by pointer (boards have no stable ID), so undo
+// fails gracefully if the user deleted the board too.
+type deleteSnapshot struct {
+	Board   *Board
+	NoteIdx int // z-order index in board.Notes at delete time
+	Note    *Note
+	Strings []*StringConn
 }
 
 func initialModel(ws *Workspace) model {
@@ -175,6 +212,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.boardAnimOldStars = nil
 			}
 		}
+		var mouseCmd tea.Cmd
 		if m.transition != nil && m.transition.Done(m.now) {
 			switch m.transition.Mode {
 			case TransitionIn:
@@ -182,6 +220,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if n := m.board.Selection(); n != nil {
 					m.editor = NewEditor(n, m.w, m.h)
 				}
+				// Release the mouse to the terminal so the user can
+				// drag-select text inside the open note and copy with the
+				// terminal's native hotkey (e.g. ctrl+shift+c).
+				mouseCmd = tea.DisableMouse
 			case TransitionOut:
 				m.mode = ModeBoard
 				if n := m.findNote(m.transition.NoteID); n != nil {
@@ -191,8 +233,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					n.BobX = 0.7
 					n.Flash = 0.5
 				}
+				// Reclaim the mouse for board drag/click handling.
+				mouseCmd = tea.EnableMouseAllMotion
 			}
 			m.transition = nil
+		}
+		if mouseCmd != nil {
+			return m, tea.Batch(tickCmd(), mouseCmd)
 		}
 		return m, tickCmd()
 
@@ -223,9 +270,10 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.fontMenu != nil {
 		return m.handleFontMenuKey(key)
 	}
-	if m.pull.Active && key == "esc" {
-		m.pull.Stop()
-		return m, nil
+	if m.pull.Active {
+		if mdl, cmd, handled := m.handlePullKey(key); handled {
+			return mdl, cmd
+		}
 	}
 	switch m.mode {
 	case ModeBoard:
@@ -234,6 +282,118 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEditKey(msg, key)
 	}
 	return m, nil
+}
+
+// handlePullKey lets the keyboard drive the in-progress string pull —
+// arrows nudge the virtual endpoint, tab/S-tab snap to other notes,
+// enter commits at the current target (note or wall-pin), esc cancels.
+// Returns `handled=true` to short-circuit the rest of the key router.
+func (m model) handlePullKey(key string) (tea.Model, tea.Cmd, bool) {
+	step := 1
+	switch key {
+	case "esc":
+		m.pull.Stop()
+		return m, nil, true
+	case "enter":
+		m.commitPullAt(m.pull.TargetX, m.pull.TargetY)
+		return m, nil, true
+	case "left", "h":
+		m.pull.SetTarget(m.pull.TargetX-step, m.pull.TargetY)
+		return m, nil, true
+	case "right", "l":
+		m.pull.SetTarget(m.pull.TargetX+step, m.pull.TargetY)
+		return m, nil, true
+	case "up", "k":
+		m.pull.SetTarget(m.pull.TargetX, m.pull.TargetY-step)
+		return m, nil, true
+	case "down", "j":
+		m.pull.SetTarget(m.pull.TargetX, m.pull.TargetY+step)
+		return m, nil, true
+	case "shift+left":
+		m.pull.SetTarget(m.pull.TargetX-5, m.pull.TargetY)
+		return m, nil, true
+	case "shift+right":
+		m.pull.SetTarget(m.pull.TargetX+5, m.pull.TargetY)
+		return m, nil, true
+	case "shift+up":
+		m.pull.SetTarget(m.pull.TargetX, m.pull.TargetY-5)
+		return m, nil, true
+	case "shift+down":
+		m.pull.SetTarget(m.pull.TargetX, m.pull.TargetY+5)
+		return m, nil, true
+	case "tab":
+		m.snapPullToNote(+1)
+		return m, nil, true
+	case "shift+tab":
+		m.snapPullToNote(-1)
+		return m, nil, true
+	}
+	return m, nil, false
+}
+
+// commitPullAt finalizes the pull: connects to a note if the target
+// lands on one, otherwise drops a wall-pin at the world coords beneath.
+func (m *model) commitPullAt(x, y int) {
+	if !m.pull.Active {
+		return
+	}
+	if idx := m.board.HitTopmost(x, y); idx >= 0 {
+		target := m.board.Notes[idx]
+		if target.ID != m.pull.FromID {
+			if s := m.board.Connect(m.pull.FromID, target.ID); s != nil {
+				target.Flash = 0.8
+				m.saver.Touch()
+			}
+		}
+	} else {
+		wx := WorldX(x, m.board.Zoom)
+		wy := WorldY(y, m.board.Zoom)
+		if s := m.board.ConnectToWall(m.pull.FromID, wx, wy); s != nil {
+			m.saver.Touch()
+		}
+	}
+	m.pull.Stop()
+}
+
+// snapPullToNote walks the notes list and snaps the pull's target to the
+// next (or previous, if dir=-1) note's pin position, skipping the source.
+func (m *model) snapPullToNote(dir int) {
+	notes := m.board.Notes
+	if len(notes) <= 1 {
+		return
+	}
+	// Find the note whose pin currently matches the target (if any).
+	curIdx := -1
+	for i, n := range notes {
+		if n.ID == m.pull.FromID {
+			continue
+		}
+		px, py := n.PinPos(m.board.Zoom)
+		if px == m.pull.TargetX && py == m.pull.TargetY {
+			curIdx = i
+			break
+		}
+	}
+	start := curIdx
+	if start < 0 {
+		// no current match — start before the first index in the dir we're going
+		if dir > 0 {
+			start = -1
+		} else {
+			start = len(notes)
+		}
+	}
+	for step := 1; step <= len(notes); step++ {
+		next := (start + dir*step) % len(notes)
+		for next < 0 {
+			next += len(notes)
+		}
+		if notes[next].ID != m.pull.FromID {
+			px, py := notes[next].PinPos(m.board.Zoom)
+			m.pull.SetTarget(px, py)
+			return
+		}
+	}
 }
 
 // handleRenameKey intercepts every keystroke while the user is editing a
@@ -335,6 +495,45 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 			m.renameBuffer = m.board.Name
 		}
 		return m, nil
+	case "}":
+		// Move active board one slot to the right.
+		if m.workspace.MoveActive(+1) {
+			m.saver.Touch()
+			m.setToast("moved board →")
+		}
+		return m, nil
+	case "ctrl+y":
+		if n := m.board.Selection(); n != nil {
+			m.copyNoteText(n.Title, n.Body)
+		} else {
+			m.setToast("select a note to copy")
+		}
+		return m, nil
+	case "ctrl+p":
+		n := m.board.Selection()
+		if n == nil {
+			m.setToast("select a note to paste into")
+			return m, nil
+		}
+		text, err := clipboard.ReadAll()
+		if err != nil || text == "" {
+			m.setToast("clipboard empty")
+			return m, nil
+		}
+		title, body := splitClipboardText(text)
+		n.Title = title
+		n.Body = body
+		n.Updated = time.Now().UTC()
+		m.saver.Touch()
+		m.setToast("pasted into note")
+		return m, nil
+	case "{":
+		// Move active board one slot to the left.
+		if m.workspace.MoveActive(-1) {
+			m.saver.Touch()
+			m.setToast("moved board ←")
+		}
+		return m, nil
 	case "D":
 		// Two-press delete with a ~2s arm window. First press warns;
 		// second press (within the window) actually deletes.
@@ -419,8 +618,15 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "d":
 		if n := m.board.Selection(); n != nil {
+			m.captureDeleteSnapshot(m.board, n)
 			m.board.Delete(n.ID)
 			m.hoverStr = -1
+			m.saver.Touch()
+			m.setToast("deleted note (u: undo)")
+		}
+		return m, nil
+	case "u":
+		if m.restoreDeletedNote() {
 			m.saver.Touch()
 		}
 		return m, nil
@@ -520,6 +726,79 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 func (m *model) setToast(msg string) {
 	m.toast = msg
 	m.toastUntil = m.now.Add(1500 * time.Millisecond)
+}
+
+// captureDeleteSnapshot records `n` and the strings that touch it so a
+// subsequent `u` can put everything back. Overwrites any prior snapshot —
+// undo only ever rewinds the most recent delete.
+func (m *model) captureDeleteSnapshot(b *Board, n *Note) {
+	idx := 0
+	for i, nn := range b.Notes {
+		if nn.ID == n.ID {
+			idx = i
+			break
+		}
+	}
+	touching := make([]*StringConn, 0)
+	for _, s := range b.Strings {
+		if s.InvolvesNote(n.ID) {
+			touching = append(touching, s)
+		}
+	}
+	m.undoSnap = &deleteSnapshot{
+		Board:   b,
+		NoteIdx: idx,
+		Note:    n,
+		Strings: touching,
+	}
+}
+
+// restoreDeletedNote re-inserts the most recently deleted note at its
+// original z-position on its original board, along with any strings it
+// was connected to. Returns false (with a toast) if nothing's to undo or
+// the original board is gone.
+func (m *model) restoreDeletedNote() bool {
+	if m.undoSnap == nil {
+		m.setToast("nothing to undo")
+		return false
+	}
+	snap := m.undoSnap
+	m.undoSnap = nil
+
+	// Verify the target board still exists in the workspace.
+	boardIdx := -1
+	for i, b := range m.workspace.Boards {
+		if b == snap.Board {
+			boardIdx = i
+			break
+		}
+	}
+	if boardIdx < 0 {
+		m.setToast("undo: board is gone")
+		return false
+	}
+
+	b := snap.Board
+	idx := snap.NoteIdx
+	if idx < 0 {
+		idx = 0
+	}
+	if idx > len(b.Notes) {
+		idx = len(b.Notes)
+	}
+	// Insert the note at its original z-position.
+	b.Notes = append(b.Notes[:idx], append([]*Note{snap.Note}, b.Notes[idx:]...)...)
+	b.Strings = append(b.Strings, snap.Strings...)
+	b.Selected = snap.Note.ID
+	snap.Note.Flash = 0.8
+
+	// Surface the restore — flip to the board if the user has moved on.
+	if boardIdx != m.workspace.ActiveIdx {
+		m.workspace.ActiveIdx = boardIdx
+		m.refreshActive()
+	}
+	m.setToast("undo: restored note")
+	return true
 }
 
 // zoomStep clamps within the full [ZoomMin, ZoomMax] range.
@@ -645,9 +924,45 @@ func (m model) handleEditKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 			_ = m.saver.Flush()
 		}
 		return m, nil
+	case "ctrl+y":
+		title, body := m.editor.Split()
+		m.copyNoteText(title, body)
+		return m, nil
+	case "ctrl+p":
+		if text, err := clipboard.ReadAll(); err == nil && text != "" {
+			m.editor.Ta.InsertString(text)
+		} else {
+			m.setToast("clipboard empty")
+		}
+		return m, nil
 	}
 	cmd := m.editor.Update(msg)
 	return m, cmd
+}
+
+// copyNoteText writes the title (if any) and body to the system clipboard,
+// joined with a blank line. Updates the toast in place of error logs.
+func (m *model) copyNoteText(title, body string) {
+	parts := []string{}
+	if title != "" {
+		parts = append(parts, title)
+	}
+	if body != "" {
+		parts = append(parts, body)
+	}
+	if len(parts) == 0 {
+		m.setToast("nothing to copy")
+		return
+	}
+	joined := parts[0]
+	if len(parts) > 1 {
+		joined = parts[0] + "\n\n" + parts[1]
+	}
+	if err := clipboard.WriteAll(joined); err == nil {
+		m.setToast("copied note")
+	} else {
+		m.setToast("clipboard unavailable")
+	}
 }
 
 // --- mouse handlers ---------------------------------------------------
@@ -973,7 +1288,7 @@ func (m model) drawFooterView(c *Canvas) {
 		drawFooter(c, "↑↓ preview  •  enter set  •  esc cancel")
 		return
 	case m.pull.Active:
-		drawFooter(c, "pull mode • click note to connect • click empty cork for wall-pin • esc cancel")
+		drawFooter(c, "pull mode • click / arrows / tab • enter commit • esc cancel")
 		return
 	case m.transition != nil:
 		drawFooter(c, "…")
@@ -1025,6 +1340,7 @@ var helpData = []helpColumn{
 		{"enter", "zoom-edit"},
 		{"n", "new"},
 		{"d", "delete"},
+		{"u", "undo delete"},
 		{"r", "raise"},
 		{"1-9", "tint"},
 	}},
@@ -1039,6 +1355,7 @@ var helpData = []helpColumn{
 	{"BOARDS", []helpEntry{
 		{">", "next"},
 		{"<", "prev"},
+		{"{ }", "move ↔"},
 		{"B", "new"},
 		{"R", "rename"},
 		{"D", "delete"},

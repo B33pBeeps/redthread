@@ -28,10 +28,22 @@ func NewEditor(n *Note, w, h int) Editor {
 	ta.CharLimit = 0
 	ta.SetWidth(editBodyWidth(rect))
 	ta.SetHeight(editBodyHeight(rect))
-	ta.SetValue(n.Title + "\n\n" + n.Body)
+	ta.SetValue(composeEditorValue(n.Title, n.Body))
 	ta.Focus()
 	ta.CursorEnd()
 	return Editor{Ta: ta, NoteID: n.ID}
+}
+
+// composeEditorValue builds the textarea seed text. Empty notes seed as
+// an empty string so the cursor lands on row 1, not row 3.
+func composeEditorValue(title, body string) string {
+	if title == "" && body == "" {
+		return ""
+	}
+	if body == "" {
+		return title
+	}
+	return title + "\n\n" + body
 }
 
 func editBodyWidth(rect Rect) int {
@@ -132,16 +144,20 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 	bg := c.Serialize()
 	bg = SpliceOverlay(bg, frame.Serialize(), rect.X, rect.Y)
 
-	// 3. Textarea inside the frame body area.
+	// 3. Textarea inside the frame body area. The textarea stores plain
+	// ASCII internally; we apply the board's font as a display-only pass
+	// so that what's visible matches the rest of the board. ANSI escapes
+	// (cursor highlight) are preserved verbatim.
 	bodyY := rect.Y + 3
 	bodyX := rect.X + 2
-	bg = SpliceOverlay(bg, e.Ta.View(), bodyX, bodyY)
+	taView := StyleViewText(e.Ta.View(), textMode)
+	bg = SpliceOverlay(bg, taView, bodyX, bodyY)
 
 	// 4. Footer.
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(Footer.Hex())).
 		Width(w).Align(lipgloss.Center).
-		Render("esc: place back  •  ctrl+s: save  •  alt+a: font menu")
+		Render("esc: place back  •  ctrl+s: save  •  ctrl+y: copy  •  ctrl+p: paste  •  drag mouse: select")
 
 	return bg + "\n" + footer
 }
