@@ -22,6 +22,11 @@ strings, smooth zoom, and multiple named boards you can switch between.
 - **Multiple named boards** you cycle through like tmux windows
   (`work`, `personal`, `ideas`, …). Each board has its own notes,
   strings, zoom, font, highlight color, and a unique cork grain.
+- **Configurable background** — two independent axes from a live-preview
+  popup (`b`): an ASCII-cork on/off toggle, and a fill color (transparent so
+  the terminal/tmux theme shows through, a curated dark-theme palette, or a
+  custom hex). Mix freely — cork over a dark color, or cork off for a clean
+  solid. One global choice for the workspace.
 - **Workspace zoom** — 5 levels (`-3..+1`) that scale note sizes *and*
   positions, so you can pack many stickies into an overview or lean in
   on a few.
@@ -105,6 +110,7 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 | `1` – `9` | tint the selected note (yellow, pink, blue, green, purple, orange, teal, cream, coral) |
 | `c` | cycle the global highlight (border) color |
 | `a` | open the font menu (live preview, enter to commit, esc to cancel) |
+| `b` | open the background menu — toggle cork (`←`/`→`) and pick a fill color (transparent, a curated dark-theme palette, or custom hex); live preview, enter to commit, esc to cancel |
 | `-` / `=` / `0` | zoom out / in / reset (5 levels) |
 | `s` | start pulling a red string (arrows/`hjkl` nudge endpoint, `tab` snap to next note, `enter` commit, `esc` cancel) |
 | `[` / `]` | cycle the hovered string |
@@ -146,12 +152,19 @@ A legacy `brainfartadhdfixerupper/` directory auto-migrates on first
 launch under the new name. v3 single-board files migrate forward into
 the v4 workspace envelope.
 
-Schema (v4):
+The workspace also stores a global `background` preference with two independent
+fields: `cork` (the ASCII texture overlay, on/off) and `color` (a hex fill, or
+omitted/`""` for transparent). For example `{"cork":false,"color":"#1a1b26"}` is
+a solid Tokyo Night background with no cork. Files written before this option
+load as cork-on + transparent, unchanged.
+
+Schema (v5):
 
 ```json
 {
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "activeIdx": 0,
+  "background": { "cork": true },
   "boards": [
     {
       "name": "main",
@@ -211,6 +224,16 @@ DESIGN.md           early design notes (historical)
 ## Changelog
 
 **Latest**
+
+*Features*
+- Background is now configurable — press `b` for a picker with two independent axes:
+  a **cork on/off toggle** (`←`/`→`) and a **fill color** — **transparent** (your
+  terminal/tmux background shows through, the default), a curated **dark-theme palette**
+  (github dark, tokyo night, catppuccin, dracula, nord, …), or a **custom hex**. Mix
+  freely; the choice is global to the workspace and persists.
+  ([#1](https://github.com/B33pBeeps/redthread/issues/1))
+
+**Previous**
 
 *Fixes*
 - Fullwidth font removed — it never rendered correctly.

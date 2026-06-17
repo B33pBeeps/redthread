@@ -96,7 +96,7 @@ func (e *Editor) Split() (string, string) {
 
 // View composes: blurred backdrop → ornate canvas frame at target rect →
 // textarea spliced inside the frame → footer.
-func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, board *Board) string {
+func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, board *Board, bgColor *RGB) string {
 	if n == nil {
 		return ""
 	}
@@ -113,6 +113,9 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 	// of notes even after the blur is applied (without it, they'd sit
 	// underneath because everything was being drawn before the notes).
 	c := NewCanvas(w, h-1)
+	if bgColor != nil {
+		c.DefaultBg = bgColor
+	}
 	drawCork(c, stars)
 	editPin := &PinOverride{
 		NoteID: n.ID,

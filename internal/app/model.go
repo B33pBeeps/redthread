@@ -81,6 +81,7 @@ type model struct {
 	boardAnimDir      int
 
 	fontMenu *FontMenu
+	bgMenu   *BackgroundMenu
 
 	// rename mode: when true, keystrokes edit renameBuffer until enter/esc.
 	renaming     bool
@@ -270,6 +271,9 @@ func (m model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.fontMenu != nil {
 		return m.handleFontMenuKey(key)
 	}
+	if m.bgMenu != nil {
+		return m.handleBgMenuKey(msg, key)
+	}
 	if m.pull.Active {
 		if mdl, cmd, handled := m.handlePullKey(key); handled {
 			return mdl, cmd
@@ -457,6 +461,67 @@ func (m model) handleFontMenuKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleBgMenuKey drives the background picker. Up/down move between the cork
+// toggle, the color rows, and the custom-hex row, live-previewing as they go.
+// Left/right/space toggle cork while the cork row is focused. On the custom
+// row, rune/backspace edit the hex buffer (valid hex previews live). Enter
+// commits + persists; esc reverts to the background active at open time.
+func (m model) handleBgMenuKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	bm := m.bgMenu
+	preview := func() { m.workspace.Background = bm.Selected() }
+
+	switch key {
+	case "esc":
+		m.workspace.Background = bm.Saved
+		m.bgMenu = nil
+		return m, nil
+	case "enter":
+		m.workspace.Background = bm.Selected()
+		m.saver.Touch()
+		m.setToast("background: " + bm.Label())
+		m.bgMenu = nil
+		return m, nil
+	case "up", "ctrl+p":
+		bm.Move(-1)
+		preview()
+		return m, nil
+	case "down", "ctrl+n", "tab":
+		bm.Move(1)
+		preview()
+		return m, nil
+	case "left", "right", " ":
+		// Arrows toggle the cork overlay from anywhere in the menu.
+		bm.ToggleCork()
+		preview()
+		return m, nil
+	case "backspace":
+		if bm.OnCustom() {
+			bm.HexBackspace()
+			preview()
+		}
+		return m, nil
+	}
+	// On the custom row, hex digits (and '#') feed the input buffer.
+	if bm.OnCustom() && len(msg.Runes) > 0 {
+		bm.HexInput(msg.Runes)
+		preview()
+		return m, nil
+	}
+	// vim-style movement / cork toggle when not typing into the hex field.
+	switch key {
+	case "k":
+		bm.Move(-1)
+		preview()
+	case "j":
+		bm.Move(1)
+		preview()
+	case "h", "l":
+		bm.ToggleCork()
+		preview()
+	}
+	return m, nil
+}
+
 func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q":
@@ -566,6 +631,9 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "a":
 		m.fontMenu = NewFontMenu(m.board.TextMode)
+		return m, nil
+	case "b":
+		m.bgMenu = NewBackgroundMenu(m.workspace.Background)
 		return m, nil
 	case "-", "_":
 		m.zoomStep(-1)
@@ -974,6 +1042,9 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.fontMenu != nil {
 		return m, nil
 	}
+	if m.bgMenu != nil {
+		return m, nil
+	}
 	if m.mode != ModeBoard {
 		cmd := m.editor.Update(msg)
 		return m, cmd
@@ -1075,6 +1146,25 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 func (m model) findNote(id string) *Note { return m.board.FindNote(id) }
 
+// newCanvas builds a canvas pre-set with the workspace's solid background
+// (nil for cork/transparent, which keeps cells transparent).
+func (m model) newCanvas(w, h int) *Canvas {
+	c := NewCanvas(w, h)
+	if bg, ok := m.workspace.BgColor(); ok {
+		c.DefaultBg = bg
+	}
+	return c
+}
+
+// effectiveStars returns the cork texture only when cork mode is active;
+// otherwise nil, so drawCork draws nothing (transparent / solid bg).
+func (m model) effectiveStars() []Star {
+	if m.workspace.CorkOn() {
+		return m.stars
+	}
+	return nil
+}
+
 // --- View -------------------------------------------------------------
 
 func (m model) View() string {
@@ -1084,7 +1174,8 @@ func (m model) View() string {
 
 	if m.mode == ModeEdit && m.transition == nil {
 		if n := m.findNote(m.editor.NoteID); n != nil {
-			base := m.editor.View(m.w, m.h, n, m.stars, m.board.TextMode, m.board)
+			bg, _ := m.workspace.BgColor()
+			base := m.editor.View(m.w, m.h, n, m.effectiveStars(), m.board.TextMode, m.board, bg)
 			if m.fontMenu != nil {
 				return m.overlayFontMenuOnString(base)
 			}
@@ -1092,7 +1183,7 @@ func (m model) View() string {
 		}
 	}
 
-	c := NewCanvas(m.w, m.h)
+	c := m.newCanvas(m.w, m.h)
 	if m.transition != nil {
 		m.drawTransitionView(c)
 	} else {
@@ -1105,6 +1196,9 @@ func (m model) View() string {
 	}
 	if m.fontMenu != nil {
 		drawFontMenu(c, m.fontMenu)
+	}
+	if m.bgMenu != nil {
+		drawBackgroundMenu(c, m.bgMenu)
 	}
 	return c.Serialize()
 }
@@ -1122,19 +1216,24 @@ func (m model) drawBoardView(c *Canvas) {
 	// offset that slides off-screen on the way out and slides in from
 	// the opposite side on the way in. The direction matches the cycle
 	// (>: old slides left, new arrives from right; <: opposite).
+	cork := m.workspace.CorkOn()
 	if m.boardAnimFrom != nil {
 		const slideMax = 8 // cells of horizontal travel
 		sub := NewCanvas(c.W, c.H)
 		if m.boardAnim < 0.5 {
 			local := easeInOutCubic(m.boardAnim * 2)
-			drawBoardSnapshot(sub, m.boardAnimFrom, m.boardAnimOldStars,
+			oldStars := m.boardAnimOldStars
+			if !cork {
+				oldStars = nil
+			}
+			drawBoardSnapshot(sub, m.boardAnimFrom, oldStars,
 				"", -1, nil, nil)
 			sub.Dim(1.0 - 0.85*local)
 			ox := -m.boardAnimDir * int(local*slideMax+0.5)
 			c.BlitAt(sub, ox, 0)
 		} else {
 			local := easeInOutCubic((m.boardAnim - 0.5) * 2)
-			drawBoardSnapshot(sub, m.board, m.stars,
+			drawBoardSnapshot(sub, m.board, m.effectiveStars(),
 				m.grabID, m.hoverStr, &m.pull, nil)
 			sub.Dim(0.15 + 0.85*local)
 			ox := m.boardAnimDir * int((1-local)*slideMax+0.5)
@@ -1142,7 +1241,7 @@ func (m model) drawBoardView(c *Canvas) {
 		}
 		return
 	}
-	drawBoardSnapshot(c, m.board, m.stars,
+	drawBoardSnapshot(c, m.board, m.effectiveStars(),
 		m.grabID, m.hoverStr, &m.pull, nil)
 }
 
@@ -1183,7 +1282,7 @@ func (m model) drawTransitionView(c *Canvas) {
 
 	// Base board (cork + background notes + strings) — drawn first, then
 	// dimmed together so the fade feels unified.
-	drawCork(c, m.stars)
+	drawCork(c, m.effectiveStars())
 
 	focusID := m.transition.NoteID
 	// During the transition, the focused note's pin lives at the
@@ -1287,6 +1386,9 @@ func (m model) drawFooterView(c *Canvas) {
 	case m.fontMenu != nil:
 		drawFooter(c, "↑↓ preview  •  enter set  •  esc cancel")
 		return
+	case m.bgMenu != nil:
+		drawFooter(c, "↑↓ move  •  ←→ toggle cork  •  type hex on the last row  •  enter set  •  esc cancel")
+		return
 	case m.pull.Active:
 		drawFooter(c, "pull mode • click / arrows / tab • enter commit • esc cancel")
 		return
@@ -1363,6 +1465,7 @@ var helpData = []helpColumn{
 	{"VIEW", []helpEntry{
 		{"-/=/0", "zoom"},
 		{"a", "font"},
+		{"b", "background"},
 		{"c", "highlight"},
 		{"?", "toggle"},
 		{"q", "quit"},

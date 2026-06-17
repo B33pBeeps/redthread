@@ -213,11 +213,62 @@ type Board struct {
 	HighlightColor int           `json:"highlightColor,omitempty"`
 }
 
+// Legacy background-mode strings from an earlier single-"mode" design.
+// Read on load and migrated into Cork/Color; never written.
+const (
+	BgCork        = "cork"
+	BgTransparent = "transparent"
+	BgSolid       = "solid"
+)
+
+// Background is the workspace-wide board background. The two axes are
+// independent: Cork toggles the ASCII texture overlay, and Color is the
+// fill drawn behind it ("" = transparent, i.e. the terminal background
+// shows through). Any combination is valid — cork on over a solid color,
+// cork off over transparent for a clean terminal, etc.
+type Background struct {
+	Cork  bool   `json:"cork"`
+	Color string `json:"color,omitempty"` // hex (e.g. "#1c2233"); "" = transparent
+
+	// Legacy dev-only field — read on load, migrated by normalizeLegacy,
+	// never written.
+	Mode string `json:"mode,omitempty"`
+}
+
+// normalizeLegacy folds the old single-"mode" representation into the
+// independent Cork/Color fields. A no-op once Mode is empty.
+func (b *Background) normalizeLegacy() {
+	switch b.Mode {
+	case BgCork:
+		b.Cork = true
+	case BgSolid, BgTransparent:
+		// Color (if any) already lives in Color; cork stays off.
+	}
+	b.Mode = ""
+}
+
 // Workspace is a list of named cork boards the user can cycle between.
 // One is "active"; everything in the running model points at that one.
 type Workspace struct {
-	Boards    []*Board `json:"boards"`
-	ActiveIdx int      `json:"activeIdx,omitempty"`
+	Boards     []*Board   `json:"boards"`
+	ActiveIdx  int        `json:"activeIdx,omitempty"`
+	Background Background `json:"background,omitempty"`
+}
+
+// CorkOn reports whether the cork texture overlay should be drawn.
+func (w *Workspace) CorkOn() bool { return w.Background.Cork }
+
+// BgColor returns the solid fill color when one is set and parses;
+// otherwise (nil, false) — meaning transparent (terminal shows through).
+func (w *Workspace) BgColor() (*RGB, bool) {
+	if w.Background.Color == "" {
+		return nil, false
+	}
+	col, ok := ParseHexColor(w.Background.Color)
+	if !ok {
+		return nil, false
+	}
+	return &col, true
 }
 
 // ActiveBoard returns the currently-focused board, never nil while the
@@ -599,7 +650,11 @@ func seedBoard() *Board {
 	return b
 }
 
-// seedWorkspace returns a workspace with one seeded "main" board.
+// seedWorkspace returns a workspace with one seeded "main" board and the
+// default look (cork on, transparent fill).
 func seedWorkspace() *Workspace {
-	return &Workspace{Boards: []*Board{seedBoard()}}
+	return &Workspace{
+		Boards:     []*Board{seedBoard()},
+		Background: Background{Cork: true},
+	}
 }

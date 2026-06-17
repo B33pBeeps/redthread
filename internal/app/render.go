@@ -21,9 +21,9 @@ const (
 )
 
 type Cell struct {
-	Rune  rune
-	Fg    *RGB  // nil = terminal default fg (so a space is fully transparent)
-	Attr  uint8 // Attr* bits
+	Rune rune
+	Fg   *RGB  // nil = terminal default fg (so a space is fully transparent)
+	Attr uint8 // Attr* bits
 }
 
 // IsEmpty returns true if the cell is the fully-transparent default.
@@ -32,6 +32,11 @@ func (c Cell) IsEmpty() bool { return c.Rune == 0 && c.Fg == nil && c.Attr == 0 
 type Canvas struct {
 	W, H  int
 	cells []Cell // row-major, len == W*H
+
+	// DefaultBg, when non-nil, is the background color emitted for every
+	// cell that has no fill of its own — i.e. a solid board background.
+	// nil keeps the original fully-transparent behavior (tmux shows through).
+	DefaultBg *RGB
 }
 
 func NewCanvas(w, h int) *Canvas {
@@ -95,6 +100,7 @@ func (c *Canvas) Serialize() string {
 	b.Grow(c.W * c.H * 2)
 
 	const reset = "\x1b[0m"
+	bg := c.DefaultBg // constant across the canvas
 
 	for y := 0; y < c.H; y++ {
 		curFg := (*RGB)(nil)
@@ -116,7 +122,8 @@ func (c *Canvas) Serialize() string {
 					b.WriteString(reset)
 					styled = false
 				}
-				if cell.Fg != nil || cell.Attr != 0 {
+				// A solid background means even fg-less cells need styling.
+				if cell.Fg != nil || cell.Attr != 0 || bg != nil {
 					if cell.Attr&AttrBold != 0 {
 						b.WriteString("\x1b[1m")
 					}
@@ -131,6 +138,9 @@ func (c *Canvas) Serialize() string {
 					}
 					if cell.Attr&AttrStrike != 0 {
 						b.WriteString("\x1b[9m")
+					}
+					if bg != nil {
+						b.WriteString(bg.BgSGR())
 					}
 					if cell.Fg != nil {
 						b.WriteString(cell.Fg.SGR())
@@ -225,6 +235,12 @@ func (c *Canvas) Dim(f float32) {
 		}
 		d := c.cells[i].Fg.Dimmed(f)
 		c.cells[i].Fg = &d
+	}
+	// Dim the solid background too so the edit backdrop / crossfade darken
+	// uniformly instead of leaving a full-brightness field behind dim text.
+	if c.DefaultBg != nil {
+		d := c.DefaultBg.Dimmed(f)
+		c.DefaultBg = &d
 	}
 }
 

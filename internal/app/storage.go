@@ -13,15 +13,16 @@ import (
 	"time"
 )
 
-const schemaVersion = 4
+const schemaVersion = 5
 
 // diskFile is the v4 envelope. v3 fields (TextMode, Notes, Strings, Zoom,
 // HighlightColor) are kept here as optional fallbacks — when a v3 file is
 // loaded, those fields are wrapped into a single board.
 type diskFile struct {
-	SchemaVersion int       `json:"schemaVersion"`
-	ActiveIdx     int       `json:"activeIdx,omitempty"`
-	Boards        []*Board  `json:"boards,omitempty"`
+	SchemaVersion int         `json:"schemaVersion"`
+	ActiveIdx     int         `json:"activeIdx,omitempty"`
+	Background    *Background `json:"background,omitempty"`
+	Boards        []*Board    `json:"boards,omitempty"`
 
 	// Legacy v3 fields — read on load, never written.
 	LegacyTextMode       TextStyleMode `json:"textMode,omitempty"`
@@ -77,9 +78,16 @@ func LoadWorkspace() (*Workspace, error) {
 		return nil, err
 	}
 
-	// v4: workspace with boards.
+	// v4/v5: workspace with boards.
 	if len(f.Boards) > 0 {
 		ws := &Workspace{Boards: f.Boards, ActiveIdx: f.ActiveIdx}
+		if f.Background != nil {
+			ws.Background = *f.Background
+			ws.Background.normalizeLegacy()
+		} else {
+			// Files written before the background option: cork on, transparent.
+			ws.Background = Background{Cork: true}
+		}
 		for _, b := range ws.Boards {
 			normalizeLoadedBoard(b)
 		}
@@ -98,7 +106,7 @@ func LoadWorkspace() (*Workspace, error) {
 			HighlightColor: f.LegacyHighlightColor,
 		}
 		normalizeLoadedBoard(b)
-		return &Workspace{Boards: []*Board{b}}, nil
+		return &Workspace{Boards: []*Board{b}, Background: Background{Cork: true}}, nil
 	}
 
 	// Empty file or unknown shape — let caller seed.
@@ -131,6 +139,11 @@ func SaveWorkspace(w *Workspace) error {
 		ActiveIdx:     w.ActiveIdx,
 		Boards:        w.Boards,
 	}
+	// Always persist the background — cork=false is meaningful, and the
+	// legacy Mode field must never be written.
+	bg := w.Background
+	bg.Mode = ""
+	f.Background = &bg
 	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
