@@ -1,3 +1,5 @@
+
+
 # redthread
 
 A sticky-note pegboard for your terminal. Mouse-first, keyboard-friendly,
@@ -212,7 +214,7 @@ internal/app/
   theme.go          colors, tints, dither, halftone, text styles
   anim.go           zoom transition timeline + easings
   edit.go           canvas-drawn edit frame + bubbles/textarea splice
-  menu.go           font-picker popup
+  menu.go           font-picker + background picker popups
   storage.go        XDG JSON persistence + v3→v4 migration
 
 docs/
