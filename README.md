@@ -40,7 +40,11 @@ strings, smooth zoom, and multiple named boards you can switch between.
 - **9 paper tints + 9 highlight colors + 8 text styles** (Unicode math
   alphabets: plain, bold, italic, bold-italic, script, fraktur,
   double-struck, monospace).
-- Persists to `$XDG_DATA_HOME/redthread/notes.json` with debounced writes.
+- **Undo everything** — a 50-step undo/redo stack covering every change:
+  paste, edit, tint, move, string, note delete, even a deleted board. `u`
+  undoes, `ctrl+r` redoes.
+- Persists to `$XDG_DATA_HOME/redthread/notes.json` with debounced writes,
+  keeping the last 20 distinct versions under `backups/`.
 
 ## Install
 
@@ -146,7 +150,8 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 | `K` / `J` | shrink / grow selected note height |
 | `enter` | zoom-to-edit |
 | `n` / `d` / `r` | new / delete / raise note |
-| `u` | undo the last delete (single step) |
+| `u` | undo (multi-step: covers every change, not just deletes) |
+| `ctrl+r` | redo |
 | `ctrl+y` / `ctrl+p` | copy / paste the selected note |
 | `1` – `9` | tint the selected note (yellow, pink, blue, green, purple, orange, teal, cream, coral) |
 | `c` | cycle the global highlight (border) color |
@@ -193,6 +198,36 @@ rapid drags coalesce into one flush.
 A legacy `brainfartadhdfixerupper/` directory auto-migrates on first
 launch under the new name. v3 single-board files migrate forward into
 the v4 workspace envelope.
+
+### Undo and backups
+
+`u` undoes and `ctrl+r` redoes, up to 50 steps. The stack covers *every*
+change — pasting over a note, an edit, a tint, a move, a string, a deleted
+note, a deleted board — not only deletions. A whole editing session
+(`enter` … `esc`) undoes as one step, and a held arrow key coalesces into
+one step rather than forty.
+
+Because pasting replaces a note's entire contents, `ctrl+p` over a note
+that already has text asks first: the footer reads `ctrl+p again to
+replace <title>`, and only a second press within 3 seconds commits.
+
+Undo lives in memory, so for anything that outlives the session there are
+on-disk backups. Each save that actually changes something first copies
+the previous `notes.json` to:
+
+```
+~/.local/share/redthread/backups/notes-YYYYMMDD-HHMMSS.mmm.json
+```
+
+The newest 20 are kept; saves that would write identical content don't
+rotate, so idling doesn't flush real history out of the ring. To recover,
+copy one back over `notes.json` while redthread is closed:
+
+```bash
+cd ~/.local/share/redthread
+ls backups/                       # newest last
+cp backups/notes-20260814-160355.812.json notes.json
+```
 
 The workspace also stores a global `background` preference with two independent
 fields: `cork` (the ASCII texture overlay, on/off) and `color` (a hex fill, or
@@ -275,7 +310,8 @@ internal/app/
   anim.go           zoom transition timeline + easings
   edit.go           canvas-drawn edit frame + bubbles/textarea splice
   menu.go           font-picker + background picker popups
-  storage.go        XDG JSON persistence + v3→v4 migration
+  storage.go        XDG JSON persistence, migrations, backup rotation
+  history.go        undo/redo stack over workspace snapshots
 
 docs/
   screenshot.png

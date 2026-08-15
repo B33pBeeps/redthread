@@ -5,10 +5,13 @@ package app
 // adds the workspace envelope; v3 single-board files migrate forward.
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -130,7 +133,8 @@ func normalizeLoadedBoard(b *Board) {
 	}
 }
 
-// SaveWorkspace writes the workspace as a v4 file (workspace envelope).
+// SaveWorkspace writes the workspace as a v4 file (workspace envelope),
+// rotating the previous content into the backup directory first.
 func SaveWorkspace(w *Workspace) error {
 	path, err := DataPath()
 	if err != nil {
@@ -151,11 +155,88 @@ func SaveWorkspace(w *Workspace) error {
 	if err != nil {
 		return err
 	}
+	// Snapshot what is on disk before overwriting it. Best-effort: a
+	// failure to back up must never stop the save itself, or a full disk
+	// would cost the user their live work as well as their history.
+	rotateBackup(path, data)
+
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// backupKeep is how many previous versions of notes.json are retained.
+// Only saves that actually change the content rotate, so this is a window
+// of the last 20 distinct states rather than 20 timer ticks.
+const backupKeep = 20
+
+// BackupDir returns the directory holding rotated copies of notes.json,
+// creating it on demand.
+func BackupDir() (string, error) {
+	path, err := DataPath()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(filepath.Dir(path), "backups")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+// rotateBackup copies the current notes.json into the backup directory
+// before it is overwritten, unless its content already matches what is
+// about to be written. Errors are swallowed by design — see SaveWorkspace.
+func rotateBackup(path string, next []byte) {
+	prev, err := os.ReadFile(path)
+	if err != nil {
+		return // nothing on disk yet (first run), or unreadable
+	}
+	if bytes.Equal(prev, next) {
+		return // the debounce fires on idle too; do not churn the ring
+	}
+
+	dir, err := BackupDir()
+	if err != nil {
+		return
+	}
+
+	// Timestamped so the ring sorts chronologically and a same-second
+	// save does not collide.
+	stamp := time.Now().UTC().Format("20060102-150405.000")
+	name := filepath.Join(dir, "notes-"+stamp+".json")
+	if err := os.WriteFile(name, prev, 0o644); err != nil {
+		return
+	}
+	pruneBackups(dir, backupKeep)
+}
+
+// pruneBackups keeps the newest `keep` files and removes the rest. Names
+// are timestamped, so lexical order is chronological order.
+func pruneBackups(dir string, keep int) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		n := e.Name()
+		if strings.HasPrefix(n, "notes-") && strings.HasSuffix(n, ".json") {
+			names = append(names, n)
+		}
+	}
+	if len(names) <= keep {
+		return
+	}
+	sort.Strings(names)
+	for _, n := range names[:len(names)-keep] {
+		_ = os.Remove(filepath.Join(dir, n))
+	}
 }
 
 // --- debouncer --------------------------------------------------------
