@@ -37,6 +37,10 @@ const (
 	ModeEdit
 )
 
+// pasteArmWindow is how long a "ctrl+p again to replace" confirmation
+// stays live before the next ctrl+p starts over as a fresh warning.
+const pasteArmWindow = 3 * time.Second
+
 type tickMsg time.Time
 
 func tickCmd() tea.Cmd {
@@ -98,21 +102,13 @@ type model struct {
 
 	mouseX, mouseY int
 
-	// Single-step undo for the most recent destructive action. Currently
-	// records note deletes (the note + its touching strings + which board
-	// it lived on). Cleared after a successful undo or when overwritten
-	// by another delete.
-	undoSnap *deleteSnapshot
-}
+	// "press ctrl+p again" arm window for pasting over a non-empty note
+	pasteArmedUntil time.Time
 
-// deleteSnapshot captures everything needed to revive a deleted note.
-// The board is referenced by pointer (boards have no stable ID), so undo
-// fails gracefully if the user deleted the board too.
-type deleteSnapshot struct {
-	Board   *Board
-	NoteIdx int // z-order index in board.Notes at delete time
-	Note    *Note
-	Strings []*StringConn
+	// history holds whole-workspace snapshots for undo/redo. Every
+	// mutation goes through m.mutate, which pushes here before the change
+	// lands.
+	history *History
 }
 
 func initialModel(ws *Workspace) model {
@@ -123,8 +119,87 @@ func initialModel(ws *Workspace) model {
 		now:       time.Now(),
 		saver:     NewSaver(ws, 400*time.Millisecond),
 		hoverStr:  -1,
+		history:   NewHistory(defaultHistoryDepth),
 	}
 	return m
+}
+
+// mutate is the single seam every content change passes through: it
+// snapshots the workspace for undo, then schedules a debounced save.
+// label names the change and appears in the toast when it is undone.
+//
+// Call it BEFORE applying the mutation — the snapshot is the pre-change
+// state.
+func (m *model) mutate(label string) {
+	if m.history != nil {
+		m.history.Push(m.workspace, label)
+	}
+	m.saver.Touch()
+}
+
+// applyRestoredWorkspace copies a workspace returned by undo/redo into the
+// live one. The contents are replaced rather than the pointer, because the
+// Saver holds a reference to this exact *Workspace — swapping the pointer
+// would leave it writing the pre-undo state to disk.
+func (m *model) applyRestoredWorkspace(ws *Workspace) {
+	if ws == nil || len(ws.Boards) == 0 {
+		return
+	}
+	m.workspace.Boards = ws.Boards
+	m.workspace.ActiveIdx = ws.ActiveIdx
+	m.workspace.Background = ws.Background
+
+	if m.workspace.ActiveIdx < 0 || m.workspace.ActiveIdx >= len(m.workspace.Boards) {
+		m.workspace.ActiveIdx = 0
+	}
+	m.refreshActive()
+
+	b := m.board
+	if b == nil {
+		return
+	}
+	// A restored selection may name a note that no longer exists; fall back
+	// to the topmost one so the board is never left with a dangling cursor.
+	if b.Selected != "" && b.Selection() == nil {
+		b.Selected = ""
+	}
+	if b.Selected == "" && len(b.Notes) > 0 {
+		b.Selected = b.Notes[len(b.Notes)-1].ID
+	}
+	if n := b.Selection(); n != nil {
+		n.Flash = 0.8
+	}
+}
+
+// undo / redo step the history and swap the resulting workspace in.
+func (m *model) undo() bool {
+	if m.history == nil || !m.history.CanUndo() {
+		m.setToast("nothing to undo")
+		return false
+	}
+	ws, label, ok := m.history.Undo(m.workspace)
+	if !ok {
+		m.setToast("nothing to undo")
+		return false
+	}
+	m.applyRestoredWorkspace(ws)
+	m.setToast("undo: " + label)
+	return true
+}
+
+func (m *model) redo() bool {
+	if m.history == nil || !m.history.CanRedo() {
+		m.setToast("nothing to redo")
+		return false
+	}
+	ws, label, ok := m.history.Redo(m.workspace)
+	if !ok {
+		m.setToast("nothing to redo")
+		return false
+	}
+	m.applyRestoredWorkspace(ws)
+	m.setToast("redo: " + label)
+	return true
 }
 
 // startBoardAnim captures the current board + its stars as the "from"
@@ -346,17 +421,16 @@ func (m *model) commitPullAt(x, y int) {
 	if idx := m.board.HitTopmost(x, y); idx >= 0 {
 		target := m.board.Notes[idx]
 		if target.ID != m.pull.FromID {
-			if s := m.board.Connect(m.pull.FromID, target.ID); s != nil {
+			m.mutate("connect string")
+			if m.board.Connect(m.pull.FromID, target.ID) != nil {
 				target.Flash = 0.8
-				m.saver.Touch()
 			}
 		}
 	} else {
 		wx := WorldX(x, m.board.Zoom)
 		wy := WorldY(y, m.board.Zoom)
-		if s := m.board.ConnectToWall(m.pull.FromID, wx, wy); s != nil {
-			m.saver.Touch()
-		}
+		m.mutate("pin string")
+		m.board.ConnectToWall(m.pull.FromID, wx, wy)
 	}
 	m.pull.Stop()
 }
@@ -416,8 +490,8 @@ func (m model) handleRenameKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) 
 			name = "board " + intToStr(m.workspace.ActiveIdx+1)
 		}
 		if m.board != nil {
+			m.mutate("rename board")
 			m.board.Name = name
-			m.saver.Touch()
 		}
 		m.renaming = false
 		m.renameBuffer = ""
@@ -547,10 +621,10 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "B":
 		// Create a new board with a unique grain seed.
+		m.mutate("new board")
 		m.startBoardAnim(+1)
 		nb := m.workspace.AddBoard("")
 		m.refreshActive()
-		m.saver.Touch()
 		// Drop straight into rename mode so the user can name it.
 		m.renaming = true
 		m.renameBuffer = nb.Name
@@ -565,7 +639,7 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 	case "}":
 		// Move active board one slot to the right.
 		if m.workspace.MoveActive(+1) {
-			m.saver.Touch()
+			m.mutate("move board")
 			m.setToast("moved board →")
 		}
 		return m, nil
@@ -587,17 +661,32 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 			m.setToast("clipboard empty")
 			return m, nil
 		}
+		// Pasting replaces the whole note. On a note that already has
+		// content that is a destructive act, so it takes two presses —
+		// undo covers it either way, but the confirmation is what the user
+		// actually sees before the text disappears.
+		if (n.Title != "" || n.Body != "") && !m.now.Before(m.pasteArmedUntil) {
+			m.pasteArmedUntil = m.now.Add(pasteArmWindow)
+			label := n.Title
+			if label == "" {
+				label = "this note"
+			}
+			m.setToast("ctrl+p again to replace " + label)
+			return m, nil
+		}
+		m.pasteArmedUntil = time.Time{}
+
+		m.mutate("paste into note")
 		title, body := splitClipboardText(text)
 		n.Title = title
 		n.Body = body
 		n.Updated = time.Now().UTC()
-		m.saver.Touch()
-		m.setToast("pasted into note")
+		m.setToast("pasted into note (u: undo)")
 		return m, nil
 	case "{":
 		// Move active board one slot to the left.
 		if m.workspace.MoveActive(-1) {
-			m.saver.Touch()
+			m.mutate("move board")
 			m.setToast("moved board ←")
 		}
 		return m, nil
@@ -606,10 +695,10 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		// second press (within the window) actually deletes.
 		if m.now.Before(m.deleteArmedUntil) {
 			name := m.board.Name
+			m.mutate("delete board")
 			m.startBoardAnim(0)
 			if m.workspace.DeleteBoard(m.workspace.ActiveIdx) {
 				m.refreshActive()
-				m.saver.Touch()
 				m.setToast("deleted board: " + name)
 			} else {
 				m.setToast("can't delete the last board")
@@ -685,38 +774,45 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if n := m.board.Selection(); n != nil {
+			// Snapshot once on the way in: an editing session undoes as a
+			// single step, back to the text as it was before the zoom.
+			m.mutate("edit note")
 			m.transition = NewTransitionIn(n, m.board.Zoom)
 		}
 		return m, nil
 	case "n":
+		m.mutate("new note")
 		n := m.board.NewNote(m.w, m.h)
 		n.Bob = 1.2
 		n.Flash = 1.0
-		m.saver.Touch()
 		return m, nil
 	case "d":
 		if n := m.board.Selection(); n != nil {
-			m.captureDeleteSnapshot(m.board, n)
+			m.mutate("delete note")
 			m.board.Delete(n.ID)
 			m.hoverStr = -1
-			m.saver.Touch()
 			m.setToast("deleted note (u: undo)")
 		}
 		return m, nil
 	case "u":
-		if m.restoreDeletedNote() {
+		if m.undo() {
+			m.saver.Touch()
+		}
+		return m, nil
+	case "ctrl+r":
+		if m.redo() {
 			m.saver.Touch()
 		}
 		return m, nil
 	case "r":
 		if n := m.board.Selection(); n != nil {
+			m.mutate("raise note")
 			for i, nn := range m.board.Notes {
 				if nn.ID == n.ID {
 					m.board.Raise(i)
 					break
 				}
 			}
-			m.saver.Touch()
 		}
 		return m, nil
 	case "s":
@@ -740,32 +836,32 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "t":
 		if m.hoverStr >= 0 && m.hoverStr < len(m.board.Strings) {
+			m.mutate("string tight/slack")
 			m.board.Strings[m.hoverStr].Tight = !m.board.Strings[m.hoverStr].Tight
-			m.saver.Touch()
 		}
 		return m, nil
 	case "f":
 		// Toggle the hovered string between in-front / behind notes.
 		if m.hoverStr >= 0 && m.hoverStr < len(m.board.Strings) {
+			m.mutate("string front/behind")
 			m.board.Strings[m.hoverStr].InFront = !m.board.Strings[m.hoverStr].InFront
-			m.saver.Touch()
 		}
 		return m, nil
 	case "x":
 		// Cut the hovered string only.
 		if m.hoverStr >= 0 && m.hoverStr < len(m.board.Strings) {
+			m.mutate("cut string")
 			if m.board.DeleteStringAt(m.hoverStr) {
 				m.hoverStr = -1
-				m.saver.Touch()
 			}
 		}
 		return m, nil
 	case "X":
 		// Cut every string on the selected note (bulk).
 		if n := m.board.Selection(); n != nil {
+			m.mutate("cut all strings")
 			if m.board.DeleteStringsTouching(n.ID) > 0 {
 				m.hoverStr = -1
-				m.saver.Touch()
 			}
 		}
 		return m, nil
@@ -774,11 +870,11 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		if n := m.board.Selection(); n != nil {
 			idx := int(key[0] - '1')
 			if idx >= 0 && idx < len(TintOrder) {
+				m.mutate("tint note")
 				n.Tint = TintOrder[idx]
 				n.Updated = time.Now().UTC()
 				n.Flash = 1.0
 				m.setToast("tint: " + n.Tint)
-				m.saver.Touch()
 			}
 		}
 		return m, nil
@@ -815,79 +911,6 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 func (m *model) setToast(msg string) {
 	m.toast = msg
 	m.toastUntil = m.now.Add(1500 * time.Millisecond)
-}
-
-// captureDeleteSnapshot records `n` and the strings that touch it so a
-// subsequent `u` can put everything back. Overwrites any prior snapshot —
-// undo only ever rewinds the most recent delete.
-func (m *model) captureDeleteSnapshot(b *Board, n *Note) {
-	idx := 0
-	for i, nn := range b.Notes {
-		if nn.ID == n.ID {
-			idx = i
-			break
-		}
-	}
-	touching := make([]*StringConn, 0)
-	for _, s := range b.Strings {
-		if s.InvolvesNote(n.ID) {
-			touching = append(touching, s)
-		}
-	}
-	m.undoSnap = &deleteSnapshot{
-		Board:   b,
-		NoteIdx: idx,
-		Note:    n,
-		Strings: touching,
-	}
-}
-
-// restoreDeletedNote re-inserts the most recently deleted note at its
-// original z-position on its original board, along with any strings it
-// was connected to. Returns false (with a toast) if nothing's to undo or
-// the original board is gone.
-func (m *model) restoreDeletedNote() bool {
-	if m.undoSnap == nil {
-		m.setToast("nothing to undo")
-		return false
-	}
-	snap := m.undoSnap
-	m.undoSnap = nil
-
-	// Verify the target board still exists in the workspace.
-	boardIdx := -1
-	for i, b := range m.workspace.Boards {
-		if b == snap.Board {
-			boardIdx = i
-			break
-		}
-	}
-	if boardIdx < 0 {
-		m.setToast("undo: board is gone")
-		return false
-	}
-
-	b := snap.Board
-	idx := snap.NoteIdx
-	if idx < 0 {
-		idx = 0
-	}
-	if idx > len(b.Notes) {
-		idx = len(b.Notes)
-	}
-	// Insert the note at its original z-position.
-	b.Notes = append(b.Notes[:idx], append([]*Note{snap.Note}, b.Notes[idx:]...)...)
-	b.Strings = append(b.Strings, snap.Strings...)
-	b.Selected = snap.Note.ID
-	snap.Note.Flash = 0.8
-
-	// Surface the restore — flip to the board if the user has moved on.
-	if boardIdx != m.workspace.ActiveIdx {
-		m.workspace.ActiveIdx = boardIdx
-		m.refreshActive()
-	}
-	m.setToast("undo: restored note")
-	return true
 }
 
 // zoomStep clamps within the full [ZoomMin, ZoomMax] range.
@@ -1101,18 +1124,17 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			if idx >= 0 {
 				target := m.board.Notes[idx]
 				if target.ID != m.pull.FromID {
-					if s := m.board.Connect(m.pull.FromID, target.ID); s != nil {
+					m.mutate("connect string")
+					if m.board.Connect(m.pull.FromID, target.ID) != nil {
 						target.Flash = 0.8
-						m.saver.Touch()
 					}
 				}
 			} else {
 				// Wall-pin: store in WORLD coords so it scales with zoom.
 				wx := WorldX(msg.X, m.board.Zoom)
 				wy := WorldY(msg.Y, m.board.Zoom)
-				if s := m.board.ConnectToWall(m.pull.FromID, wx, wy); s != nil {
-					m.saver.Touch()
-				}
+				m.mutate("pin string")
+				m.board.ConnectToWall(m.pull.FromID, wx, wy)
 			}
 			m.pull.Stop()
 			return m, nil
@@ -1124,6 +1146,9 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if hit := m.board.Notes[idx]; hit.OnResizeHandle(msg.X, msg.Y, m.board.Zoom) {
+			// Same reasoning as the move snapshot below: the size changes
+			// on every motion event, so the pre-resize size only exists now.
+			m.mutate("resize note")
 			m.board.Raise(idx)
 			r := hit.ScreenRect(m.board.Zoom)
 			m.resizeID = hit.ID
@@ -1133,6 +1158,11 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.hoverStr = -1
 			return m, nil
 		}
+		// Snapshot before the grab: by the time we know a drag happened
+		// (on release) the note has already moved, so this is the only
+		// point where the pre-move position still exists. Raise() also
+		// reorders the note stack, which is itself worth undoing.
+		m.mutate("move note")
 		m.board.Raise(idx)
 		n := m.board.Notes[len(m.board.Notes)-1]
 		m.grabID = n.ID
@@ -1148,6 +1178,7 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		n.Flash = 0.6
 		m.hoverStr = -1
 		if m.lastClickN == n.ID && m.now.Sub(m.lastClickT) < 350*time.Millisecond {
+			m.mutate("edit note")
 			m.transition = NewTransitionIn(n, m.board.Zoom)
 			m.grabID = ""
 			n.Lifted = false
@@ -1507,7 +1538,8 @@ var helpData = []helpColumn{
 		{"enter", "zoom-edit"},
 		{"n", "new"},
 		{"d", "delete"},
-		{"u", "undo delete"},
+		{"u", "undo"},
+		{"C-r", "redo"},
 		{"r", "raise"},
 		{"1-9", "tint"},
 	}},
