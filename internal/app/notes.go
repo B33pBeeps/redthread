@@ -382,16 +382,26 @@ func (w *Workspace) ActiveBoard() *Board {
 // order (negative = move left, positive = move right). Wraps around. The
 // active index follows the moved board so the tab bar's `●` stays on it.
 // Returns true if a swap happened.
-func (w *Workspace) MoveActive(delta int) bool {
+// CanMoveActive reports whether MoveActive(delta) would actually reorder
+// anything. Callers snapshot for undo before mutating, so they need to
+// know in advance rather than from the return value.
+func (w *Workspace) CanMoveActive(delta int) bool {
 	n := len(w.Boards)
 	if n < 2 || delta == 0 {
 		return false
 	}
 	src := w.ActiveIdx
 	dst := ((src+delta)%n + n) % n
-	if dst == src {
+	return dst != src
+}
+
+func (w *Workspace) MoveActive(delta int) bool {
+	if !w.CanMoveActive(delta) {
 		return false
 	}
+	n := len(w.Boards)
+	src := w.ActiveIdx
+	dst := ((src+delta)%n + n) % n
 	b := w.Boards[src]
 	w.Boards = append(w.Boards[:src], w.Boards[src+1:]...)
 	// dst is in original numbering. After removing src, items at indices

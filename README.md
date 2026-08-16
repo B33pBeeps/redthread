@@ -216,7 +216,7 @@ on-disk backups. Each save that actually changes something first copies
 the previous `notes.json` to:
 
 ```
-~/.local/share/redthread/backups/notes-YYYYMMDD-HHMMSS.mmm.json
+~/.local/share/redthread/backups/notes-YYYYMMDD-HHMMSS.nnnnnnnnn.json
 ```
 
 The newest 20 are kept; saves that would write identical content don't
@@ -226,7 +226,7 @@ copy one back over `notes.json` while redthread is closed:
 ```bash
 cd ~/.local/share/redthread
 ls backups/                       # newest last
-cp backups/notes-20260814-160355.812.json notes.json
+cp backups/notes-20260814-160355.812734000.json notes.json
 ```
 
 The workspace also stores a global `background` preference with two independent

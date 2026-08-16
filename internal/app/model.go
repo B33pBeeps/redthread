@@ -11,6 +11,11 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// readClipboard is the indirection tests replace: the system clipboard is
+// unavailable in CI and is shared global state when it is available, so a
+// test that needs "the clipboard has text" swaps this instead.
+var readClipboard = clipboard.ReadAll
+
 // splitClipboardText parses pasted text into (title, body) the same way the
 // editor's Split does: first line is the title, the rest is the body, with
 // at most one separator blank line consumed.
@@ -145,9 +150,35 @@ func (m *model) applyRestoredWorkspace(ws *Workspace) {
 	if ws == nil || len(ws.Boards) == 0 {
 		return
 	}
+	// View state is deliberately outside undo's remit: zoom, font,
+	// highlight, and the background are appearance, and rewinding them
+	// behind an unrelated content change is surprising. The snapshot is a
+	// whole-struct copy, so those fields ride along inside it — carry the
+	// live values across the restore rather than letting the old ones win.
+	type viewState struct {
+		zoom      int
+		textMode  TextStyleMode
+		highlight int
+	}
+	// Keyed by GrainSeed, which is assigned once at board creation and
+	// never changes — unlike the name, which is itself undoable.
+	live := map[int64]viewState{}
+	for _, b := range m.workspace.Boards {
+		live[b.GrainSeed] = viewState{zoom: b.Zoom, textMode: b.TextMode, highlight: b.HighlightColor}
+	}
+	liveBackground := m.workspace.Background
+
 	m.workspace.Boards = ws.Boards
 	m.workspace.ActiveIdx = ws.ActiveIdx
-	m.workspace.Background = ws.Background
+	m.workspace.Background = liveBackground
+
+	for _, b := range m.workspace.Boards {
+		if v, ok := live[b.GrainSeed]; ok {
+			b.Zoom = v.zoom
+			b.TextMode = v.textMode
+			b.HighlightColor = v.highlight
+		}
+	}
 
 	if m.workspace.ActiveIdx < 0 || m.workspace.ActiveIdx >= len(m.workspace.Boards) {
 		m.workspace.ActiveIdx = 0
@@ -638,8 +669,13 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "}":
 		// Move active board one slot to the right.
-		if m.workspace.MoveActive(+1) {
+		// Snapshot first: MoveActive rearranges the slice in place, so a
+		// snapshot taken after it would record the new order and undo
+		// would be a no-op. Ask first so a no-op move (one board, or a
+		// wrap onto itself) does not consume an undo slot.
+		if m.workspace.CanMoveActive(+1) {
 			m.mutate("move board")
+			m.workspace.MoveActive(+1)
 			m.setToast("moved board →")
 		}
 		return m, nil
@@ -656,7 +692,7 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 			m.setToast("select a note to paste into")
 			return m, nil
 		}
-		text, err := clipboard.ReadAll()
+		text, err := readClipboard()
 		if err != nil || text == "" {
 			m.setToast("clipboard empty")
 			return m, nil
@@ -685,8 +721,13 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "{":
 		// Move active board one slot to the left.
-		if m.workspace.MoveActive(-1) {
+		// Snapshot first: MoveActive rearranges the slice in place, so a
+		// snapshot taken after it would record the new order and undo
+		// would be a no-op. Ask first so a no-op move (one board, or a
+		// wrap onto itself) does not consume an undo slot.
+		if m.workspace.CanMoveActive(-1) {
 			m.mutate("move board")
+			m.workspace.MoveActive(-1)
 			m.setToast("moved board ←")
 		}
 		return m, nil
@@ -1055,7 +1096,7 @@ func (m model) handleEditKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		m.copyNoteText(title, body)
 		return m, nil
 	case "ctrl+p":
-		if text, err := clipboard.ReadAll(); err == nil && text != "" {
+		if text, err := readClipboard(); err == nil && text != "" {
 			m.editor.Ta.InsertString(text)
 		} else {
 			m.setToast("clipboard empty")

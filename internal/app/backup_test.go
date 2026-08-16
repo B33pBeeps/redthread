@@ -11,8 +11,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func readBackupDir(t *testing.T) []string {
@@ -195,5 +198,101 @@ func TestBackupsDoNotDisturbTheMainSaveFile(t *testing.T) {
 	}
 	if f.SchemaVersion != schemaVersion {
 		t.Errorf("schemaVersion = %d; want %d", f.SchemaVersion, schemaVersion)
+	}
+}
+
+// The debounce can fire twice inside a millisecond. If two backups land on
+// the same filename the older one is silently overwritten and a distinct
+// version is lost, so the stamp needs sub-millisecond resolution.
+func TestRapidSavesDoNotCollide(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	ws := seedWorkspace()
+	if err := SaveWorkspace(ws); err != nil {
+		t.Fatal(err)
+	}
+	const saves = 50
+	for i := 0; i < saves; i++ {
+		ws.Boards[0].Notes[0].X = i // distinct content every time
+		if err := SaveWorkspace(ws); err != nil {
+			t.Fatalf("save %d: %v", i, err)
+		}
+	}
+
+	names := readBackupDir(t)
+	if len(names) != backupKeep {
+		t.Errorf("%d rapid distinct saves left %d backups; want %d — "+
+			"fewer means filenames collided and versions were lost",
+			saves, len(names), backupKeep)
+	}
+}
+
+// Lexical order must equal chronological order, since pruning sorts by
+// name to decide what to drop.
+func TestBackupNamesSortChronologically(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	ws := seedWorkspace()
+	if err := SaveWorkspace(ws); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		ws.Boards[0].Notes[0].X = i
+		if err := SaveWorkspace(ws); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	names := readBackupDir(t)
+	if len(names) < 2 {
+		t.Fatalf("need at least 2 backups, got %d", len(names))
+	}
+	sorted := append([]string(nil), names...)
+	sort.Strings(sorted)
+	for i := range names {
+		if names[i] != sorted[i] {
+			t.Fatalf("directory order %v is not lexical order %v", names, sorted)
+		}
+	}
+
+	dir, _ := BackupDir()
+	var prev time.Time
+	for _, n := range names {
+		info, err := os.Stat(filepath.Join(dir, n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !prev.IsZero() && info.ModTime().Before(prev) {
+			t.Errorf("%s sorts after an older file; lexical order != time order", n)
+		}
+		prev = info.ModTime()
+	}
+}
+
+// The README tells users to look for this pattern and copy one back by
+// hand, so the name is part of the interface.
+func TestBackupFilenameMatchesDocumentedPattern(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+
+	ws := seedWorkspace()
+	if err := SaveWorkspace(ws); err != nil {
+		t.Fatal(err)
+	}
+	ws.Boards[0].Notes[0].Title = "changed"
+	if err := SaveWorkspace(ws); err != nil {
+		t.Fatal(err)
+	}
+
+	names := readBackupDir(t)
+	if len(names) == 0 {
+		t.Fatal("no backup produced")
+	}
+	// notes-YYYYMMDD-HHMMSS.nnnnnnnnn.json — as documented in README.md.
+	re := regexp.MustCompile(`^notes-\d{8}-\d{6}\.\d{9}\.json$`)
+	for _, n := range names {
+		if !re.MatchString(n) {
+			t.Errorf("backup name %q does not match the documented pattern "+
+				"notes-YYYYMMDD-HHMMSS.nnnnnnnnn.json", n)
+		}
 	}
 }

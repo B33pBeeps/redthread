@@ -203,9 +203,11 @@ func rotateBackup(path string, next []byte) {
 		return
 	}
 
-	// Timestamped so the ring sorts chronologically and a same-second
-	// save does not collide.
-	stamp := time.Now().UTC().Format("20060102-150405.000")
+	// Timestamped so the ring sorts chronologically, at nanosecond
+	// resolution: the debounce can fire twice inside a millisecond, and a
+	// colliding name would silently overwrite a distinct earlier version.
+	// The fixed-width fractional part keeps lexical order == time order.
+	stamp := time.Now().UTC().Format("20060102-150405.000000000")
 	name := filepath.Join(dir, "notes-"+stamp+".json")
 	if err := os.WriteFile(name, prev, 0o644); err != nil {
 		return

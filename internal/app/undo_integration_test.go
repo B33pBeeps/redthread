@@ -6,6 +6,7 @@ package app
 // anything, so these tests press the keys.
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -221,22 +222,85 @@ func TestUndoLeavesAValidSelection(t *testing.T) {
 	}
 }
 
+// stubClipboard makes readClipboard return fixed text for one test.
+func stubClipboard(t *testing.T, text string) {
+	t.Helper()
+	prev := readClipboard
+	readClipboard = func() (string, error) { return text, nil }
+	t.Cleanup(func() { readClipboard = prev })
+}
+
 // Pasting over a note with content must warn first. This is the guard that
 // would have prevented the original loss outright.
 func TestPasteOverANonEmptyNoteAsksFirst(t *testing.T) {
+	stubClipboard(t, "clipboard junk\n\nsome url")
+
 	m := newTestModel(t)
 	n := m.board.Selection()
 	if n == nil || (n.Title == "" && n.Body == "") {
 		t.Fatal("need a non-empty selected note")
 	}
-	origTitle := n.Title
+	origTitle, origBody := n.Title, n.Body
 
-	// First ctrl+p arms the confirmation rather than replacing anything.
-	// (clipboard.ReadAll may fail in CI; the arm check runs after it, so
-	// assert only when the clipboard actually produced text.)
-	m2 := pressKey(t, m, "ctrl+p")
-	if got := m2.findNote(n.ID); got.Title != origTitle && !m2.pasteArmedUntil.IsZero() {
-		t.Errorf("first ctrl+p replaced the note title (%q); it should warn first", got.Title)
+	// The first ctrl+p must arm the confirmation and change nothing.
+	m = pressKey(t, m, "ctrl+p")
+	got := m.findNote(n.ID)
+	if got.Title != origTitle || got.Body != origBody {
+		t.Fatalf("first ctrl+p replaced the note (%q / %q); it must warn first",
+			got.Title, got.Body)
+	}
+	if m.pasteArmedUntil.IsZero() {
+		t.Error("first ctrl+p did not arm the confirmation window")
+	}
+	if !strings.Contains(m.toast, "again") {
+		t.Errorf("toast = %q; want a confirmation prompt", m.toast)
+	}
+}
+
+// ...and the second press within the window goes through.
+func TestSecondPasteReplacesAndIsUndoable(t *testing.T) {
+	stubClipboard(t, "clipboard junk\n\nsome url")
+
+	m := newTestModel(t)
+	n := m.board.Selection()
+	if n == nil || (n.Title == "" && n.Body == "") {
+		t.Fatal("need a non-empty selected note")
+	}
+	id, origTitle, origBody := n.ID, n.Title, n.Body
+
+	m = pressKey(t, m, "ctrl+p") // arms
+	m = pressKey(t, m, "ctrl+p") // commits
+
+	got := m.findNote(id)
+	if got.Title != "clipboard junk" {
+		t.Fatalf("second ctrl+p did not paste: title = %q", got.Title)
+	}
+
+	m = pressKey(t, m, "u")
+	got = m.findNote(id)
+	if got.Title != origTitle || got.Body != origBody {
+		t.Errorf("undo after paste gave %q / %q; want %q / %q",
+			got.Title, got.Body, origTitle, origBody)
+	}
+}
+
+// An empty note has nothing to lose, so pasting into it should not nag.
+func TestPasteIntoAnEmptyNoteDoesNotAsk(t *testing.T) {
+	stubClipboard(t, "fresh content")
+
+	m := newTestModel(t)
+	m = pressKey(t, m, "n") // new notes start empty
+	n := m.board.Selection()
+	if n == nil {
+		t.Fatal("no selection after creating a note")
+	}
+	if n.Title != "" || n.Body != "" {
+		t.Skipf("new note is not empty (%q / %q)", n.Title, n.Body)
+	}
+
+	m = pressKey(t, m, "ctrl+p")
+	if got := m.findNote(n.ID); got.Title != "fresh content" {
+		t.Errorf("paste into an empty note gave %q; want it to apply immediately", got.Title)
 	}
 }
 
@@ -261,5 +325,140 @@ func TestHistoryCoalescesAKeyRepeatNudge(t *testing.T) {
 	}
 	if got := m.history.Len(); got != 1 {
 		t.Errorf("12 rapid nudges produced %d undo entries; want 1", got)
+	}
+}
+
+// Reordering boards with `{` / `}` must be undoable. The snapshot has to
+// happen before MoveActive runs, since it rearranges the slice in place.
+func TestUndoRestoresBoardOrder(t *testing.T) {
+	m := newTestModel(t)
+	// Two more boards so a reorder is observable.
+	m = pressKey(t, m, "B")
+	m = pressKey(t, m, "esc")
+	m = pressKey(t, m, "B")
+	m = pressKey(t, m, "esc")
+	if len(m.workspace.Boards) < 3 {
+		t.Fatalf("need 3 boards, got %d", len(m.workspace.Boards))
+	}
+
+	order := func(m model) []string {
+		var out []string
+		for _, b := range m.workspace.Boards {
+			out = append(out, b.Name)
+		}
+		return out
+	}
+	before := order(m)
+
+	m = pressKey(t, m, "{")
+	after := order(m)
+	if equalStrings(before, after) {
+		t.Fatalf("`{` did not reorder the boards: %v", after)
+	}
+
+	m = pressKey(t, m, "u")
+	if got := order(m); !equalStrings(got, before) {
+		t.Errorf("after undo, board order = %v; want %v", got, before)
+	}
+}
+
+// A no-op reorder (a single board, or a wrap onto itself) must not
+// consume an undo slot — otherwise `{` on a one-board workspace silently
+// eats the entry holding a real change.
+func TestNoOpBoardMoveDoesNotPushHistory(t *testing.T) {
+	m := newTestModel(t)
+	if len(m.workspace.Boards) != 1 {
+		t.Skipf("seed has %d boards; this test wants 1", len(m.workspace.Boards))
+	}
+	before := m.history.Len()
+	m = pressKey(t, m, "{")
+	m = pressKey(t, m, "}")
+	if got := m.history.Len(); got != before {
+		t.Errorf("no-op board moves pushed %d history entries; want 0", got-before)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// Zoom, font, highlight, and the background are view state: they do not
+// push undo entries, and undoing a *content* change must not rewind them.
+// The snapshot is a whole-struct copy, so these fields ride along inside
+// it — applyRestoredWorkspace has to carry the live values across.
+func TestUndoLeavesViewStateAlone(t *testing.T) {
+	m := newTestModel(t)
+
+	m = pressKey(t, m, "n") // content change, snapshotted at the current view
+
+	m = pressKey(t, m, "-") // zoom out
+	m = pressKey(t, m, "c") // cycle the highlight color
+	zoom, highlight := m.board.Zoom, m.board.HighlightColor
+	if zoom == 0 {
+		t.Fatal("zoom did not change")
+	}
+
+	m = pressKey(t, m, "u") // undo the note, not the view
+
+	if got := m.board.Zoom; got != zoom {
+		t.Errorf("undo changed zoom from %d to %d", zoom, got)
+	}
+	if got := m.board.HighlightColor; got != highlight {
+		t.Errorf("undo changed the highlight from %d to %d", highlight, got)
+	}
+}
+
+// View state is carried by GrainSeed rather than name, since a rename is
+// itself undoable and would break a name-keyed match.
+func TestUndoRenamePreservesViewState(t *testing.T) {
+	m := newTestModel(t)
+	m = pressKey(t, m, "-")
+	zoom := m.board.Zoom
+	if zoom == 0 {
+		t.Fatal("zoom did not change")
+	}
+	original := m.board.Name
+
+	m = pressKey(t, m, "R")
+	for i := 0; i < 32; i++ { // clear the seeded buffer
+		m = pressKey(t, m, "backspace")
+	}
+	for _, r := range "renamed" {
+		m = pressKey(t, m, string(r))
+	}
+	m = pressKey(t, m, "enter")
+	if m.board.Name != "renamed" {
+		t.Fatalf("rename did not take: %q", m.board.Name)
+	}
+
+	m = pressKey(t, m, "u")
+	if m.board.Name != original {
+		t.Errorf("undo gave name %q; want %q", m.board.Name, original)
+	}
+	if got := m.board.Zoom; got != zoom {
+		t.Errorf("after undoing a rename, zoom = %d; want %d", got, zoom)
+	}
+}
+
+// Changing the background must not consume an undo slot either.
+func TestViewStateChangesDoNotPushHistory(t *testing.T) {
+	m := newTestModel(t)
+	before := m.history.Len()
+
+	m = pressKey(t, m, "-") // zoom
+	m = pressKey(t, m, "=")
+	m = pressKey(t, m, "0")
+	m = pressKey(t, m, "c") // highlight
+
+	if got := m.history.Len(); got != before {
+		t.Errorf("view-state changes pushed %d undo entries; want 0", got-before)
 	}
 }
