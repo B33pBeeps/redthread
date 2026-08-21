@@ -20,6 +20,10 @@ func newTestModel(t *testing.T) model {
 	m.w, m.h = 120, 40
 	m.now = time.Now()
 	m.stars = GenStarsForBoard(m.w, m.h, ws.ActiveBoard().GrainSeed)
+	// Key presses arm the debounced saver, whose timer marshals the
+	// workspace on its own goroutine ~400ms later — after the test has
+	// returned and while the next one is mutating. Cancel it at teardown.
+	t.Cleanup(m.saver.Cancel)
 	return m
 }
 
