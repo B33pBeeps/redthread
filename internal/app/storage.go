@@ -265,6 +265,19 @@ func (s *Saver) Touch() {
 	})
 }
 
+// Cancel drops a pending write without performing it. The timer fires on
+// its own goroutine and marshals the workspace, so anything that tears
+// down a model — notably tests — needs a way to stop it before mutating
+// the workspace again.
+func (s *Saver) Cancel() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.timer != nil {
+		s.timer.Stop()
+		s.timer = nil
+	}
+}
+
 func (s *Saver) Flush() error {
 	s.mu.Lock()
 	if s.timer != nil {
