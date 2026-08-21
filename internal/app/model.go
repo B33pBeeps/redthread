@@ -357,6 +357,18 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+
+	case externalEditDoneMsg:
+		n := m.findNote(msg.noteID)
+		toast, changed := applyExternalEdit(n, msg)
+		if changed {
+			n.Updated = time.Now().UTC()
+			n.Flash = 1.0
+			m.saver.Touch()
+		}
+		m.setToast(toast)
+		// The editor owned the terminal; take the screen back.
+		return m, tea.Batch(tickCmd(), tea.EnterAltScreen)
 	}
 	return m, nil
 }
@@ -849,6 +861,14 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 			m.saver.Touch()
 		}
 		return m, nil
+	case "e":
+		// Hand the note to $EDITOR. The TUI suspends while it runs.
+		cmd, why := openInEditor(m.board.Selection())
+		if cmd == nil {
+			m.setToast(why)
+			return m, nil
+		}
+		return m, cmd
 	case "r":
 		if n := m.board.Selection(); n != nil {
 			m.mutate("raise note")
@@ -1106,6 +1126,26 @@ func (m model) handleEditKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 			m.setToast("clipboard empty")
 		}
 		return m, nil
+	case "ctrl+e":
+		// Hand off to $EDITOR from inside the card. Commit the live buffer
+		// to the note first, so the editor opens what is on screen rather
+		// than the last saved text.
+		n := m.findNote(m.editor.NoteID)
+		if n == nil {
+			return m, nil
+		}
+		title, body := m.editor.Split()
+		n.Title = title
+		n.Body = body
+		cmd, why := openInEditor(n)
+		if cmd == nil {
+			m.setToast(why)
+			return m, nil
+		}
+		// Leave the card: re-entering with the external result already
+		// applied is clearer than splicing it into the live textarea.
+		m.mode = ModeBoard
+		return m, cmd
 	}
 	cmd := m.editor.Update(msg)
 	return m, cmd
@@ -1586,6 +1626,7 @@ var helpData = []helpColumn{
 		{"u", "undo"},
 		{"C-r", "redo"},
 		{"r", "raise"},
+		{"e", "$EDITOR"},
 		{"1-9", "tint"},
 	}},
 	{"STRINGS", []helpEntry{
