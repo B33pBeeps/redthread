@@ -18,6 +18,10 @@ import (
 type Editor struct {
 	Ta     textarea.Model
 	NoteID string
+
+	// Vim is non-nil when modal editing is on. It owns the buffer in
+	// normal and visual mode; the textarea takes over for insert.
+	Vim *VimState
 }
 
 func NewEditor(n *Note, w, h int) Editor {
@@ -32,6 +36,44 @@ func NewEditor(n *Note, w, h int) Editor {
 	ta.Focus()
 	ta.CursorEnd()
 	return Editor{Ta: ta, NoteID: n.ID}
+}
+
+// NewVimEditor is NewEditor with modal editing enabled, starting in
+// normal mode as vim does.
+func NewVimEditor(n *Note, w, h int) Editor {
+	e := NewEditor(n, w, h)
+	e.Vim = NewVimState(composeEditorValue(n.Title, n.Body))
+	return e
+}
+
+// SyncToTextarea pushes the vim buffer into the textarea, for entering
+// insert mode. The textarea's own cursor cannot be placed across wrapped
+// lines, so this positions it as closely as the widget allows: the right
+// row when lines are short, and the right column within that row.
+func (e *Editor) SyncToTextarea() {
+	if e.Vim == nil {
+		return
+	}
+	e.Ta.SetValue(e.Vim.Text())
+	for i := 0; i < 1000 && e.Ta.Line() > 0; i++ {
+		e.Ta.CursorUp()
+	}
+	for i := 0; i < e.Vim.Row; i++ {
+		e.Ta.CursorDown()
+	}
+	e.Ta.SetCursor(e.Vim.Col)
+}
+
+// SyncFromTextarea pulls edits made in insert mode back into the vim
+// buffer, so normal mode sees what was typed.
+func (e *Editor) SyncFromTextarea() {
+	if e.Vim == nil {
+		return
+	}
+	e.Vim.SetText(e.Ta.Value())
+	e.Vim.Row = e.Ta.Line()
+	e.Vim.Col = e.Ta.LineInfo().ColumnOffset + e.Ta.LineInfo().StartColumn
+	e.Vim.clamp()
 }
 
 // composeEditorValue builds the textarea seed text. Empty notes seed as
@@ -79,6 +121,9 @@ func (e *Editor) Resize(w, h int) {
 // is the body.
 func (e *Editor) Split() (string, string) {
 	val := e.Ta.Value()
+	if e.Vim != nil && e.Vim.Mode != VimInsert {
+		val = e.Vim.Text()
+	}
 	lines := strings.SplitN(val, "\n", 2)
 	if len(lines) == 0 {
 		return "", ""
@@ -153,14 +198,29 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 	// (cursor highlight) are preserved verbatim.
 	bodyY := rect.Y + 3
 	bodyX := rect.X + 2
-	taView := StyleViewText(e.Ta.View(), textMode)
-	bg = SpliceOverlay(bg, taView, bodyX, bodyY)
+	var bodyView string
+	if e.Vim != nil && e.Vim.Mode != VimInsert {
+		// Normal/visual: vim owns the buffer, so render it here with a
+		// block cursor. The textarea cannot show a cursor it cannot
+		// place.
+		bodyView = vimRender(e.Vim,
+			editBodyWidth(rect), editBodyHeight(rect),
+			tint.Ink, tint.Paper, tint.Ink)
+		bodyView = StyleViewText(bodyView, textMode)
+	} else {
+		bodyView = StyleViewText(e.Ta.View(), textMode)
+	}
+	bg = SpliceOverlay(bg, bodyView, bodyX, bodyY)
 
 	// 4. Footer.
+	footerText := "esc: place back  •  ctrl+s: save  •  ctrl+y: copy  •  ctrl+p: paste  •  ctrl+e: $EDITOR"
+	if e.Vim != nil {
+		footerText = vimModeLabel(e.Vim)
+	}
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(Footer.Hex())).
 		Width(w).Align(lipgloss.Center).
-		Render("esc: place back  •  ctrl+s: save  •  ctrl+y: copy  •  ctrl+p: paste  •  ctrl+e: $EDITOR")
+		Render(footerText)
 
 	return bg + "\n" + footer
 }

@@ -327,7 +327,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case TransitionIn:
 				m.mode = ModeEdit
 				if n := m.board.Selection(); n != nil {
-					m.editor = NewEditor(n, m.w, m.h)
+					if m.workspace.Vim {
+						m.editor = NewVimEditor(n, m.w, m.h)
+					} else {
+						m.editor = NewEditor(n, m.w, m.h)
+					}
 				}
 				// Release the mouse to the terminal so the user can
 				// drag-select text inside the open note and copy with the
@@ -1100,6 +1104,11 @@ func abs(x int) int {
 }
 
 func (m model) handleEditKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	// Modal editing intercepts everything except the handful of controls
+	// that mean the same thing in every mode (save, copy, paste, leave).
+	if m.editor.Vim != nil && !isEditorControlKey(key) {
+		return m.handleVimKey(msg, key)
+	}
 	switch key {
 	case "esc":
 		if n := m.findNote(m.editor.NoteID); n != nil {
@@ -1159,6 +1168,64 @@ func (m model) handleEditKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 	}
 	cmd := m.editor.Update(msg)
 	return m, cmd
+}
+
+// isEditorControlKey names the keys that keep their meaning regardless of
+// the vim mode: they are app controls, not text editing.
+func isEditorControlKey(key string) bool {
+	switch key {
+	case "ctrl+s", "ctrl+y", "ctrl+p", "ctrl+e", "ctrl+c":
+		return true
+	}
+	return false
+}
+
+// handleVimKey routes a keystroke through the modal state machine and
+// keeps the textarea in step with it.
+//
+// esc in normal mode leaves the card, matching what esc does without vim
+// enabled; in insert or visual mode it returns to normal, as in vim.
+func (m model) handleVimKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
+	v := m.editor.Vim
+
+	if key == "esc" && v.Mode == VimNormal {
+		// Leave the editor entirely.
+		if n := m.findNote(m.editor.NoteID); n != nil {
+			title, body := m.editor.Split()
+			n.Title = title
+			n.Body = body
+			n.Updated = time.Now().UTC()
+			m.saver.Touch()
+			m.transition = NewTransitionOut(n, m.board.Zoom)
+		} else {
+			m.mode = ModeBoard
+		}
+		return m, nil
+	}
+
+	wasInsert := v.Mode == VimInsert
+
+	if wasInsert {
+		// The textarea holds the live text while typing; let it handle the
+		// key, then pull the result back so normal mode sees it.
+		if key == "esc" {
+			m.editor.SyncFromTextarea()
+			v.Key("esc")
+			return m, nil
+		}
+		cmd := m.editor.Update(msg)
+		m.editor.SyncFromTextarea()
+		v.Mode = VimInsert // SyncFromTextarea does not change the mode
+		return m, cmd
+	}
+
+	v.Key(key)
+
+	if v.Mode == VimInsert {
+		// Just entered insert: hand the buffer to the textarea.
+		m.editor.SyncToTextarea()
+	}
+	return m, nil
 }
 
 // copyNoteText writes the title (if any) and body to the system clipboard,

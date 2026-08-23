@@ -7,9 +7,19 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+// envTruthy reads the usual affirmative spellings for a boolean env var.
+func envTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 // Run is the package's main entry point. cmd/redthread/main.go calls it.
 func Run() {
@@ -18,6 +28,8 @@ func Run() {
 	flag.BoolVar(&fresh, "fresh", false, "start with a fresh seeded workspace, ignore saved notes")
 	flag.StringVar(&themeFlag, "theme", "",
 		"color palette: auto (detect the terminal background), light, or dark. Also settable with RT_THEME.")
+	var vimFlag bool
+	flag.BoolVar(&vimFlag, "vim", false, "modal (vim) editing in the note card. Also settable with RT_VIM=1, and remembered once used.")
 	flag.Parse()
 
 	if themeFlag != "" {
@@ -56,6 +68,12 @@ func Run() {
 	// probe, an explicit auto so the next run performs it.
 	if explicit {
 		ws.SetThemeMode(mode)
+	}
+
+	// Modal editing: the flag or RT_VIM turns it on for this run and is
+	// remembered; otherwise the saved preference stands.
+	if vimFlag || envTruthy(os.Getenv("RT_VIM")) {
+		ws.Vim = true
 	}
 
 	if active := ws.ActiveBoard(); active != nil {

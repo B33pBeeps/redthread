@@ -27,6 +27,7 @@ type diskFile struct {
 	ActiveIdx     int         `json:"activeIdx,omitempty"`
 	Background    *Background `json:"background,omitempty"`
 	Theme         string      `json:"theme,omitempty"`
+	Vim           bool        `json:"vim,omitempty"`
 	Boards        []*Board    `json:"boards,omitempty"`
 
 	// Legacy v3 fields — read on load, never written.
@@ -85,7 +86,7 @@ func LoadWorkspace() (*Workspace, error) {
 
 	// v4/v5/v6: workspace with boards.
 	if len(f.Boards) > 0 {
-		ws := &Workspace{Boards: f.Boards, ActiveIdx: f.ActiveIdx, Theme: f.Theme}
+		ws := &Workspace{Boards: f.Boards, ActiveIdx: f.ActiveIdx, Theme: f.Theme, Vim: f.Vim}
 		if f.Background != nil {
 			ws.Background = *f.Background
 			ws.Background.normalizeLegacy()
@@ -144,6 +145,7 @@ func SaveWorkspace(w *Workspace) error {
 		SchemaVersion: schemaVersion,
 		ActiveIdx:     w.ActiveIdx,
 		Theme:         w.Theme,
+		Vim:           w.Vim,
 		Boards:        w.Boards,
 	}
 	// Always persist the background — cork=false is meaningful, and the
