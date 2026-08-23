@@ -311,6 +311,10 @@ type Workspace struct {
 	// auto-detect. Omitted from the file when empty, so a workspace that
 	// has never expressed a preference keeps getting detection.
 	Theme string `json:"theme,omitempty"`
+
+	// Vim enables modal editing in the note card. Off by default and
+	// omitted when off, so nobody's muscle memory changes without asking.
+	Vim bool `json:"vim,omitempty"`
 }
 
 // ThemeMode returns the saved palette preference, defaulting to auto for
