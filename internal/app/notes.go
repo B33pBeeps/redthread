@@ -46,10 +46,12 @@ func zoomScale(z int) float32 {
 type NoteDims struct{ W, H int }
 
 // DimsFor returns rendered note size at a zoom level.
-func DimsFor(zoom int) NoteDims {
+func DimsFor(zoom int) NoteDims { return dimsFromWorld(baseNoteW, baseNoteH, zoom) }
+
+func dimsFromWorld(bw, bh, zoom int) NoteDims {
 	s := zoomScale(zoom)
-	w := int(float32(baseNoteW)*s + 0.5)
-	h := int(float32(baseNoteH)*s + 0.5)
+	w := int(float32(bw)*s + 0.5)
+	h := int(float32(bh)*s + 0.5)
 	if w < 6 {
 		w = 6
 	}
@@ -57,6 +59,55 @@ func DimsFor(zoom int) NoteDims {
 		h = 4
 	}
 	return NoteDims{W: w, H: h}
+}
+
+// Resize limits, in WORLD cells.
+const (
+	minNoteW = 20
+	minNoteH = 8
+	maxNoteW = 140
+	maxNoteH = 60
+)
+
+// WorldSize returns the note's size in world cells (default if unset).
+func (n *Note) WorldSize() (int, int) {
+	w, h := n.W, n.H
+	if w <= 0 {
+		w = baseNoteW
+	}
+	if h <= 0 {
+		h = baseNoteH
+	}
+	return w, h
+}
+
+// SetWorldSize clamps and stores a new world size.
+func (n *Note) SetWorldSize(w, h int) {
+	n.W = clampInt(w, minNoteW, maxNoteW)
+	n.H = clampInt(h, minNoteH, maxNoteH)
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// Dims returns the note's rendered size at a zoom level.
+func (n *Note) Dims(zoom int) NoteDims {
+	bw, bh := n.WorldSize()
+	return dimsFromWorld(bw, bh, zoom)
+}
+
+// OnResizeHandle reports whether screen cell (cx, cy) is on the note's
+// bottom-right corner grip.
+func (n *Note) OnResizeHandle(cx, cy, zoom int) bool {
+	r := n.ScreenRect(zoom)
+	return cx >= r.X+r.W-2 && cx < r.X+r.W && cy >= r.Y+r.H-2 && cy < r.Y+r.H
 }
 
 // WorldX / WorldY convert a screen cell coordinate to the equivalent
@@ -107,6 +158,8 @@ type Note struct {
 	X       int       `json:"x"` // WORLD coord
 	Y       int       `json:"y"` // WORLD coord
 	Tint    string    `json:"tint"`
+	W       int       `json:"w,omitempty"` // WORLD size; 0 = default
+	H       int       `json:"h,omitempty"`
 	Created time.Time `json:"created"`
 	Updated time.Time `json:"updated"`
 
@@ -136,7 +189,7 @@ func (n *Note) EffectiveY(zoom int) int {
 
 // ScreenRect — drawing rect (no bob, stable for shadow/hit-test).
 func (n *Note) ScreenRect(zoom int) Rect {
-	d := DimsFor(zoom)
+	d := n.Dims(zoom)
 	return Rect{X: ScreenX(n.X, zoom), Y: ScreenY(n.Y, zoom), W: d.W, H: d.H}
 }
 
