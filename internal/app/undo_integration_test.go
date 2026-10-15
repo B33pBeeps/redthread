@@ -466,3 +466,67 @@ func TestViewStateChangesDoNotPushHistory(t *testing.T) {
 		t.Errorf("view-state changes pushed %d undo entries; want 0", got-before)
 	}
 }
+
+// Keyboard nudges go through the same seam as mouse drags, so they are
+// undoable and a held key coalesces into one step.
+func TestUndoRecoversAKeyboardNudge(t *testing.T) {
+	m := newTestModel(t)
+	n := m.board.Selection()
+	if n == nil {
+		t.Fatal("no selection")
+	}
+	id, x := n.ID, n.X
+
+	m = pressKey(t, m, "l")
+	if m.findNote(id).X == x {
+		t.Fatal("nudge did not move the note")
+	}
+	m = pressKey(t, m, "l")
+	m = pressKey(t, m, "l")
+	if got := m.history.Len(); got != 1 {
+		t.Errorf("three rapid nudges produced %d undo entries; want 1", got)
+	}
+
+	m = pressKey(t, m, "u")
+	if got := m.findNote(id).X; got != x {
+		t.Errorf("after undo X = %d; want %d", got, x)
+	}
+}
+
+// Resizing a note (H/J/K/L, or the corner drag) is a content change too.
+func TestUndoRecoversAResize(t *testing.T) {
+	m := newTestModel(t)
+	n := m.board.Selection()
+	if n == nil {
+		t.Fatal("no selection")
+	}
+	id := n.ID
+	w0, h0 := n.WorldSize()
+
+	m = pressKey(t, m, "L")
+	if w, _ := m.findNote(id).WorldSize(); w == w0 {
+		t.Fatal("L did not widen the note")
+	}
+
+	m = pressKey(t, m, "u")
+	if w, h := m.findNote(id).WorldSize(); w != w0 || h != h0 {
+		t.Errorf("after undo size = %dx%d; want %dx%d", w, h, w0, h0)
+	}
+}
+
+// A refused delete (last board) must not consume an undo slot.
+func TestRefusedBoardDeleteDoesNotPushHistory(t *testing.T) {
+	m := newTestModel(t)
+	if len(m.workspace.Boards) != 1 {
+		t.Skipf("seed has %d boards; this test wants 1", len(m.workspace.Boards))
+	}
+	before := m.history.Len()
+	m = pressKey(t, m, "D")
+	m = pressKey(t, m, "D")
+	if len(m.workspace.Boards) != 1 {
+		t.Fatal("the last board was deleted")
+	}
+	if got := m.history.Len(); got != before {
+		t.Errorf("a refused board delete pushed %d undo entries; want 0", got-before)
+	}
+}
