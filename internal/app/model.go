@@ -357,6 +357,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+
+	case externalEditDoneMsg:
+		n := m.findNote(msg.noteID)
+		toast, changed := applyExternalEdit(n, msg)
+		if changed {
+			n.Updated = time.Now().UTC()
+			n.Flash = 1.0
+			m.saver.Touch()
+		}
+		m.setToast(toast)
+		// Bubble Tea restores the alt screen itself after ExecProcess, but
+		// ReleaseTerminal disables mouse reporting and RestoreTerminal never
+		// re-enables it, so ask for it back here. The tick chain was never
+		// stopped, so do not start a second one.
+		return m, tea.EnableMouseAllMotion
 	}
 	return m, nil
 }
@@ -849,6 +864,18 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 			m.saver.Touch()
 		}
 		return m, nil
+	case "e":
+		// Hand the note to $EDITOR. The TUI suspends while it runs.
+		cmd, why := openInEditor(m.board.Selection())
+		if cmd == nil {
+			m.setToast(why)
+			return m, nil
+		}
+		// Snapshot now: by the time the editor's result lands the note
+		// has already changed, so this is the last point where the
+		// pre-edit text still exists.
+		m.mutate("edit in $EDITOR")
+		return m, cmd
 	case "r":
 		if n := m.board.Selection(); n != nil {
 			m.mutate("raise note")
@@ -1106,6 +1133,29 @@ func (m model) handleEditKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 			m.setToast("clipboard empty")
 		}
 		return m, nil
+	case "ctrl+e":
+		// Hand off to $EDITOR from inside the card. Commit the live buffer
+		// to the note first, so the editor opens what is on screen rather
+		// than the last saved text.
+		n := m.findNote(m.editor.NoteID)
+		if n == nil {
+			return m, nil
+		}
+		title, body := m.editor.Split()
+		n.Title = title
+		n.Body = body
+		m.saver.Touch() // the card's text is now the note's text; persist it
+		cmd, why := openInEditor(n)
+		if cmd == nil {
+			m.setToast(why)
+			return m, nil
+		}
+		// Snapshot before suspending, same as the `e` path.
+		m.mutate("edit in $EDITOR")
+		// Leave the card: re-entering with the external result already
+		// applied is clearer than splicing it into the live textarea.
+		m.mode = ModeBoard
+		return m, cmd
 	}
 	cmd := m.editor.Update(msg)
 	return m, cmd
@@ -1586,6 +1636,7 @@ var helpData = []helpColumn{
 		{"u", "undo"},
 		{"C-r", "redo"},
 		{"r", "raise"},
+		{"e", "$EDITOR"},
 		{"1-9", "tint"},
 	}},
 	{"STRINGS", []helpEntry{

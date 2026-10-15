@@ -37,6 +37,8 @@ strings, smooth zoom, and multiple named boards you can switch between.
   on a few.
 - **3D zoom-to-edit** — a smooth scale + lift + shadow animation that
   settles into a card with a live textarea.
+- **Or edit in `$EDITOR`** — `e` hands the note to your real editor as a
+  markdown file and reads it back when you quit. See [External editor](#external-editor).
 - **9 paper tints + 9 highlight colors + 8 text styles** (Unicode math
   alphabets: plain, bold, italic, bold-italic, script, fraktur,
   double-struck, monospace).
@@ -150,6 +152,7 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 | `K` / `J` | shrink / grow selected note height |
 | `enter` | zoom-to-edit |
 | `n` / `d` / `r` | new / delete / raise note |
+| `e` | open the selected note in `$EDITOR` (see [External editor](#external-editor)) |
 | `u` | undo (multi-step: covers every change, not just deletes) |
 | `ctrl+r` | redo |
 | `ctrl+y` / `ctrl+p` | copy / paste the selected note |
@@ -185,9 +188,43 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 |---|---|
 | typing | edit body (first non-empty line is the title; text renders in the board's font) |
 | `ctrl+y` / `ctrl+p` | copy the note / paste at cursor (system clipboard) |
+| `ctrl+e` | hand the current text to `$EDITOR` |
 | drag mouse | native terminal selection — copy with your terminal's hotkey |
 | `esc` | close + save with reverse transition |
 | `ctrl+s` | save without closing |
+
+## External editor
+
+The built-in card is a textarea — fine for a few lines, less so for a long
+note. `e` on a selected note (or `ctrl+e` from inside the card) writes it
+to a temp `.md` file, suspends the TUI, and runs your editor:
+
+```bash
+export EDITOR=nvim        # or: hx, micro, "code -w", "emacsclient -nw"
+```
+
+`VISUAL` wins over `EDITOR` if both are set, by the usual convention. The
+value is a command line, not just a program name, so flags work — `code
+-w` and `subl -w` need their wait flags or the editor returns immediately.
+With neither variable set, `e` says so instead of guessing at `vi`.
+
+The file uses the same convention as the built-in editor: the first
+non-empty line is the title, the rest is the body.
+
+```markdown
+write rfc
+
+- auth spec
+- sync protocol
+```
+
+The `.md` extension is deliberate — it's what makes your editor turn on
+markdown highlighting.
+
+Nothing is written back unless the file actually changed, so quitting
+without saving is a no-op. The note is also left alone if the editor exits
+non-zero (`:cq` in vim), if the file can't be read, or if it comes back
+empty — a stray `:q!` on the wrong buffer shouldn't blank a note.
 
 ## Data
 
@@ -310,6 +347,7 @@ internal/app/
   anim.go           zoom transition timeline + easings
   edit.go           canvas-drawn edit frame + bubbles/textarea splice
   menu.go           font-picker + background picker popups
+  extedit.go        $EDITOR hand-off (temp file, exec, read back)
   storage.go        XDG JSON persistence, migrations, backup rotation
   history.go        undo/redo stack over workspace snapshots
 
