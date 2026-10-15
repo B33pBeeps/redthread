@@ -93,6 +93,7 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 |---|---|
 | click a note | select + raise |
 | drag | move (drops with a bounce) |
+| drag bottom-right corner | resize the note |
 | double-click | zoom-to-edit |
 | click empty cork while pulling a string | place a wall-pin |
 
@@ -103,6 +104,8 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 | `tab` / `shift+tab` | cycle note selection |
 | `← ↑ ↓ →` or `hjkl` | nudge (overshoots in motion direction) |
 | `shift + ← ↑ ↓ →` | nudge ×5 |
+| `H` / `L` | shrink / grow selected note width |
+| `K` / `J` | shrink / grow selected note height |
 | `enter` | zoom-to-edit |
 | `n` / `d` / `r` | new / delete / raise note |
 | `u` | undo the last delete (single step) |

@@ -54,7 +54,7 @@ func shadowRect(c *Canvas, x0, y0, w, h int, lifted bool) {
 
 // drawShadow wraps shadowRect for a Note at board zoom.
 func drawShadow(c *Canvas, n *Note, zoom int) {
-	d := DimsFor(zoom)
+	d := n.Dims(zoom)
 	shadowRect(c, n.EffectiveX(zoom), n.EffectiveY(zoom), d.W, d.H, n.Lifted)
 }
 
@@ -98,7 +98,7 @@ func vertBorderChar(seed uint32, dy int) rune {
 
 // drawNote renders a Note at the board's zoom level.
 func drawNote(c *Canvas, n *Note, selected bool, textMode TextStyleMode, zoom int) {
-	d := DimsFor(zoom)
+	d := n.Dims(zoom)
 	drawNoteAt(c, Rect{X: n.EffectiveX(zoom), Y: n.EffectiveY(zoom), W: d.W, H: d.H},
 		n, selected, textMode)
 }
