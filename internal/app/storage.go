@@ -245,32 +245,49 @@ func pruneBackups(dir string, keep int) {
 
 // --- debouncer --------------------------------------------------------
 
+// Saver debounces writes. Touch snapshots the workspace on the caller's
+// goroutine and hands the copy to a timer, so the timer never reads the
+// live workspace that the update loop keeps mutating (that was a data
+// race, and with backups a torn marshal could be rotated into the ring).
+// A generation counter lets a stale timer step aside when a newer Touch,
+// Flush or Cancel has happened, and writeMu keeps writes in order.
 type Saver struct {
-	ws    *Workspace
-	mu    sync.Mutex
-	timer *time.Timer
-	delay time.Duration
+	ws      *Workspace
+	mu      sync.Mutex
+	writeMu sync.Mutex
+	timer   *time.Timer
+	delay   time.Duration
+	gen     uint64
 }
 
 func NewSaver(w *Workspace, delay time.Duration) *Saver {
 	return &Saver{ws: w, delay: delay}
 }
 
+// Touch schedules a save of the workspace as it is right now.
 func (s *Saver) Touch() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.timer != nil {
 		s.timer.Stop()
 	}
+	s.gen++
+	gen := s.gen
+	snap := cloneWorkspace(s.ws) // taken here, on the caller's goroutine
 	s.timer = time.AfterFunc(s.delay, func() {
-		_ = SaveWorkspace(s.ws)
+		s.writeMu.Lock()
+		defer s.writeMu.Unlock()
+		s.mu.Lock()
+		stale := gen != s.gen
+		s.mu.Unlock()
+		if stale {
+			return // superseded by a newer Touch, Flush or Cancel
+		}
+		_ = SaveWorkspace(snap)
 	})
 }
 
-// Cancel drops a pending write without performing it. The timer fires on
-// its own goroutine and marshals the workspace, so anything that tears
-// down a model — notably tests — needs a way to stop it before mutating
-// the workspace again.
+// Cancel drops a pending write without performing it.
 func (s *Saver) Cancel() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -278,14 +295,19 @@ func (s *Saver) Cancel() {
 		s.timer.Stop()
 		s.timer = nil
 	}
+	s.gen++
 }
 
+// Flush writes the live workspace now and invalidates any pending timer.
 func (s *Saver) Flush() error {
 	s.mu.Lock()
 	if s.timer != nil {
 		s.timer.Stop()
 		s.timer = nil
 	}
+	s.gen++
 	s.mu.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return SaveWorkspace(s.ws)
 }
