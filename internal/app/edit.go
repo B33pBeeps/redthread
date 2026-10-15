@@ -160,7 +160,7 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 	footer := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(Footer.Hex())).
 		Width(w).Align(lipgloss.Center).
-		Render("esc: place back  •  ctrl+s: save  •  ctrl+y: copy  •  ctrl+p: paste  •  drag mouse: select")
+		Render("esc: place back  •  ctrl+s: save  •  ctrl+y: copy  •  ctrl+p: paste  •  ctrl+e: $EDITOR")
 
 	return bg + "\n" + footer
 }
