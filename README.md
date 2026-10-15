@@ -1,5 +1,3 @@
-
-
 # redthread
 
 A sticky-note pegboard for your terminal. Mouse-first, keyboard-friendly,
