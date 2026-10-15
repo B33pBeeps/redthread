@@ -24,9 +24,14 @@ strings, smooth zoom, and multiple named boards you can switch between.
   strings, zoom, font, highlight color, and a unique cork grain.
 - **Configurable background** — two independent axes from a live-preview
   popup (`b`): an ASCII-cork on/off toggle, and a fill color (transparent so
-  the terminal/tmux theme shows through, a curated dark-theme palette, or a
-  custom hex). Mix freely — cork over a dark color, or cork off for a clean
-  solid. One global choice for the workspace.
+  the terminal/tmux theme shows through, a curated palette of dark *and*
+  light editor themes, or a custom hex). Mix freely — cork over a dark
+  color, or cork off for a clean solid. One global choice for the workspace.
+- **Light and dark palettes** — the board renders foreground-only, so its
+  colors have to match your terminal background. redthread detects that
+  background at startup and picks the matching palette; `T` flips it, and
+  `--theme=light|dark` or `RT_THEME` forces it when detection can't see
+  through tmux or ssh. See [Theme](#theme).
 - **Workspace zoom** — 5 levels (`-3..+1`) that scale note sizes *and*
   positions, so you can pack many stickies into an overview or lean in
   on a few.
@@ -57,6 +62,39 @@ redthread
 
 First run with no save file gets a small demo board. `redthread --fresh`
 ignores the save and reseeds.
+
+## Theme
+
+The board sets only foreground colors and lets your terminal background
+show through, so the palette has to know whether that background is dark
+or light. On startup redthread asks the terminal for its background color
+and picks the matching palette.
+
+Plenty of setups swallow that query — tmux without `allow-passthrough`,
+some ssh sessions, anything that isn't a TTY. When the answer doesn't come
+back, redthread assumes dark. Override it:
+
+```bash
+redthread --theme=light     # force the light palette
+redthread --theme=dark      # force the dark palette
+redthread --theme=auto      # detect (the default)
+
+export RT_THEME=light       # same, for your shell rc or tmux config
+```
+
+Precedence is `--theme` → `RT_THEME` → the saved choice → detection.
+
+Inside the app, `T` toggles light/dark and remembers it, so the next launch
+skips detection entirely. The choice is stored per workspace in
+`notes.json`.
+
+`--theme=auto` is an override like the other two, not the absence of one:
+it re-detects *and* forgets a saved choice, so it's the way back to
+detection after pressing `T`. (Deleting the `theme` key from `notes.json`
+does the same thing.)
+
+Both palettes carry the same nine tints and nine highlight colors under the
+same names, so switching themes never disturbs a note's saved colors.
 
 ## Demos
 
@@ -112,8 +150,9 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 | `ctrl+y` / `ctrl+p` | copy / paste the selected note |
 | `1` – `9` | tint the selected note (yellow, pink, blue, green, purple, orange, teal, cream, coral) |
 | `c` | cycle the global highlight (border) color |
+| `T` | toggle the light / dark palette (remembered across launches) |
 | `a` | open the font menu (live preview, enter to commit, esc to cancel) |
-| `b` | open the background menu — toggle cork (`←`/`→`) and pick a fill color (transparent, a curated dark-theme palette, or custom hex); live preview, enter to commit, esc to cancel |
+| `b` | open the background menu — toggle cork (`←`/`→`) and pick a fill color (transparent, a curated palette of dark and light editor themes, or custom hex); live preview, enter to commit, esc to cancel |
 | `-` / `=` / `0` | zoom out / in / reset (5 levels) |
 | `s` | start pulling a red string (arrows/`hjkl` nudge endpoint, `tab` snap to next note, `enter` commit, `esc` cancel) |
 | `[` / `]` | cycle the hovered string |
@@ -161,13 +200,14 @@ omitted/`""` for transparent). For example `{"cork":false,"color":"#1a1b26"}` is
 a solid Tokyo Night background with no cork. Files written before this option
 load as cork-on + transparent, unchanged.
 
-Schema (v5):
+Schema (v6):
 
 ```json
 {
-  "schemaVersion": 5,
+  "schemaVersion": 6,
   "activeIdx": 0,
   "background": { "cork": true },
+  "theme": "light",
   "boards": [
     {
       "name": "main",
@@ -185,17 +225,34 @@ Schema (v5):
 }
 ```
 
+`theme` is `"light"`, `"dark"`, or absent for auto-detect. v5 files simply
+lack the key and load as auto, so nothing needs migrating.
+
 ## Customizing
 
-Color palettes and text styles live in `internal/app/theme.go`:
+Colors live in `internal/app/palette.go`, as two `Palette` values:
 
-- `Tints` + `TintOrder` — the 9 paper colors.
-- `SelBorderChoices` — the 9 highlight colors.
+- `darkPalette()` / `lightPalette()` — the full color set for each
+  terminal background, including `Tints` (the 9 paper colors),
+  `SelBorderChoices` (the 9 highlight colors), the cork shades, the
+  shadow, and the chrome.
+- `ApplyTheme(light bool)` installs one of them into the package-level
+  vars every draw site reads.
+
+Text styles and character pools stay in `internal/app/theme.go`:
+
 - `TextModes` — the Unicode-alphabet font options.
 - `StarChars` / `PoreChars` / `BlotchChars` — cork-texture char pools.
 
 Edit any of those, rebuild, and the whole app picks up the new values
 (help panel + menu + cycle included).
+
+When adding colors, note the rule the palettes follow: **text** needs
+enough contrast to read (the light palette keeps ink under ~0.5 Rec-601
+luma), but **texture** — cork specks, shadow dither — must instead sit the
+*same distance* from the background as its dark counterpart sits from
+black. Making texture merely "dark enough" turns the board into noise.
+`theme_test.go` enforces both rules.
 
 ## File layout
 
@@ -212,7 +269,9 @@ internal/app/
                     text, fibers)
   wire.go           red-string curve rendering + pull physics
   render.go         cell grid + coalesced ANSI emitter (transparent bg)
-  theme.go          colors, tints, dither, halftone, text styles
+  theme.go          color type, dither, halftone, text styles
+  palette.go        the dark + light palettes and ApplyTheme
+  theme_mode.go     --theme / RT_THEME parsing + background detection
   anim.go           zoom transition timeline + easings
   edit.go           canvas-drawn edit frame + bubbles/textarea splice
   menu.go           font-picker + background picker popups

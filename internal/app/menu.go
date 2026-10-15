@@ -366,18 +366,25 @@ func drawBackgroundMenuAt(c *Canvas, x, y int, menu *BackgroundMenu) {
 		})
 	}
 
-	// Color rows (after a one-line spacer).
+	// Color rows (after a one-line spacer). A faint marker sits beside the
+	// light fills so the two groups read apart at a glance — the swatches
+	// alone are hard to tell apart at this size.
 	firstColorRow := corkRow + 2
 	for i, ch := range BackgroundColors {
 		row := firstColorRow + i
 		selected := menu.Cursor == 1+i
 		var right func()
+		isLight := false
 		if ch.Hex == "" {
 			right = func() { c.WriteText(swatchX, row, "▁▁▁▁▁▁", Footer, AttrFaint) }
 		} else if col, ok := ParseHexColor(ch.Hex); ok {
 			right = solidSwatch(row, col)
+			isLight = col.Brightness() > 0.5
 		}
 		drawRow(row, selected, ch.Name, DimText, right)
+		if isLight {
+			c.SetRune(x+3, row, '·', Footer, AttrFaint)
+		}
 	}
 
 	// Custom hex row.

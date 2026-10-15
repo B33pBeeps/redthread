@@ -796,6 +796,17 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		}
 		m.saver.Touch()
 		return m, nil
+	case "T":
+		// Flip between the light and dark palettes. Useful when the
+		// terminal-background probe guessed wrong, or when the terminal
+		// theme changes while the board is open.
+		mode := m.workspace.ToggleTheme()
+		// The board's highlight index points into the palette that just
+		// changed, so re-resolve it against the new colors.
+		m.board.ApplyGlobalBorder()
+		m.setToast("theme: " + mode.String())
+		m.saver.Touch()
+		return m, nil
 	}
 	return m, nil
 }
@@ -1521,6 +1532,7 @@ var helpData = []helpColumn{
 		{"a", "font"},
 		{"b", "background"},
 		{"c", "highlight"},
+		{"T", "light/dark"},
 		{"?", "toggle"},
 		{"q", "quit"},
 	}},
