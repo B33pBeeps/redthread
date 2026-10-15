@@ -13,15 +13,17 @@ import (
 	"time"
 )
 
-const schemaVersion = 5
+const schemaVersion = 6
 
 // diskFile is the v4 envelope. v3 fields (TextMode, Notes, Strings, Zoom,
 // HighlightColor) are kept here as optional fallbacks — when a v3 file is
-// loaded, those fields are wrapped into a single board.
+// loaded, those fields are wrapped into a single board. v6 adds the theme
+// preference; v5 files simply lack the key and load as auto.
 type diskFile struct {
 	SchemaVersion int         `json:"schemaVersion"`
 	ActiveIdx     int         `json:"activeIdx,omitempty"`
 	Background    *Background `json:"background,omitempty"`
+	Theme         string      `json:"theme,omitempty"`
 	Boards        []*Board    `json:"boards,omitempty"`
 
 	// Legacy v3 fields — read on load, never written.
@@ -78,9 +80,9 @@ func LoadWorkspace() (*Workspace, error) {
 		return nil, err
 	}
 
-	// v4/v5: workspace with boards.
+	// v4/v5/v6: workspace with boards.
 	if len(f.Boards) > 0 {
-		ws := &Workspace{Boards: f.Boards, ActiveIdx: f.ActiveIdx}
+		ws := &Workspace{Boards: f.Boards, ActiveIdx: f.ActiveIdx, Theme: f.Theme}
 		if f.Background != nil {
 			ws.Background = *f.Background
 			ws.Background.normalizeLegacy()
@@ -137,6 +139,7 @@ func SaveWorkspace(w *Workspace) error {
 	f := diskFile{
 		SchemaVersion: schemaVersion,
 		ActiveIdx:     w.ActiveIdx,
+		Theme:         w.Theme,
 		Boards:        w.Boards,
 	}
 	// Always persist the background — cork=false is meaningful, and the

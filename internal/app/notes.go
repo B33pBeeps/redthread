@@ -306,6 +306,45 @@ type Workspace struct {
 	Boards     []*Board   `json:"boards"`
 	ActiveIdx  int        `json:"activeIdx,omitempty"`
 	Background Background `json:"background,omitempty"`
+
+	// Theme is the saved palette preference: "light", "dark", or "" for
+	// auto-detect. Omitted from the file when empty, so a workspace that
+	// has never expressed a preference keeps getting detection.
+	Theme string `json:"theme,omitempty"`
+}
+
+// ThemeMode returns the saved palette preference, defaulting to auto for
+// an absent or unrecognized value.
+func (w *Workspace) ThemeMode() ThemeMode {
+	m, err := ParseThemeMode(w.Theme)
+	if err != nil {
+		return ThemeAuto
+	}
+	return m
+}
+
+// SetThemeMode records a palette preference. Auto clears the field rather
+// than writing "auto", keeping the key out of the file entirely.
+func (w *Workspace) SetThemeMode(m ThemeMode) {
+	if m == ThemeAuto {
+		w.Theme = ""
+		return
+	}
+	w.Theme = m.String()
+}
+
+// ToggleTheme flips between the light and dark palettes, applies the new
+// one immediately, and records the choice. A workspace still on auto
+// resolves to whatever is currently rendered before flipping, so the first
+// toggle always visibly changes something.
+func (w *Workspace) ToggleTheme() ThemeMode {
+	next := ThemeLight
+	if w.ThemeMode() == ThemeLight || (w.ThemeMode() == ThemeAuto && currentThemeIsLight()) {
+		next = ThemeDark
+	}
+	w.SetThemeMode(next)
+	ApplyTheme(next == ThemeLight)
+	return next
 }
 
 // CorkOn reports whether the cork texture overlay should be drawn.

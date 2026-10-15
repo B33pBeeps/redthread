@@ -97,36 +97,39 @@ func (c RGB) Brightness() float32 {
 }
 
 // --- cork / background -------------------------------------------------
+//
+// Every color below is set by ApplyTheme from the active Palette (see
+// palette.go). They are package-level vars rather than constants precisely
+// so the whole board can be re-tinted for a light terminal without every
+// draw site having to thread a theme through.
 
 var (
-	CorkDark    = RGB{82, 52, 32}
-	CorkMid     = RGB{122, 84, 56}
-	CorkLight   = RGB{172, 126, 76}
-	CorkRust    = RGB{146, 80, 44}  // warmer reddish-brown
-	CorkWarm    = RGB{198, 148, 88} // honey highlight
-	CorkPore    = RGB{58, 36, 22}   // rare pores / holes
-	CorkBlotch  = RGB{94, 64, 40}   // cork blotches
-	CorkPatchFg = RGB{110, 74, 48}  // bigger brown "patch" fg (with `▒` density)
+	CorkDark    RGB
+	CorkMid     RGB
+	CorkLight   RGB
+	CorkRust    RGB // warmer reddish-brown
+	CorkWarm    RGB // honey highlight
+	CorkPore    RGB // rare pores / holes
+	CorkBlotch  RGB // cork blotches
+	CorkPatchFg RGB // bigger brown "patch" fg (with `▒` density)
 
-	PinRed   = RGB{230, 60, 60}
-	PinHi    = RGB{255, 152, 152}
-	PinDark  = RGB{140, 26, 26}
-	StringRd = RGB{210, 44, 44}
-	StringHi = RGB{245, 100, 100} // brighter red for the pulled-end tip
-	ShadowBG = RGB{34, 22, 14}
-	ShadowMi = RGB{52, 34, 22}
-	Footer   = RGB{154, 123, 90}
-	DimText  = RGB{180, 150, 110}
-	Flash    = RGB{240, 232, 210} // slightly warm, not pure white
-	DarkTint = RGB{18, 12, 8}     // for darken/vignette passes
+	PinRed   RGB
+	PinHi    RGB
+	PinDark  RGB
+	StringRd RGB
+	StringHi RGB // brighter accent for the pulled-end tip
+	ShadowBG RGB
+	ShadowMi RGB
+	Footer   RGB
+	DimText  RGB
+	Flash    RGB
+	DarkTint RGB // for darken/vignette passes
 
 	// SelBorder — legacy default (first entry of SelBorderChoices).
 	// Per-note colors are preferred: Note.BorderColor picks an index.
-	SelBorder = SelBorderChoices[0].Color
+	SelBorder RGB
 )
 
-// Weighted shade pool — duplicates bias the random pick toward common
-// mid tones, with occasional brighter/rustier accents.
 // BorderChoice pairs a display name with an RGB for the border palette.
 type BorderChoice struct {
 	Name  string
@@ -134,18 +137,10 @@ type BorderChoice struct {
 }
 
 // SelBorderChoices — the 9 border colors available for notes. Keys 1-9
-// map to these in order; `c` cycles through them.
-var SelBorderChoices = []BorderChoice{
-	{"warm white", RGB{245, 238, 220}},
-	{"cool white", RGB{230, 240, 250}},
-	{"bright", RGB{255, 255, 255}},
-	{"cyan", RGB{100, 220, 235}},
-	{"gold", RGB{220, 180, 80}},
-	{"mint", RGB{170, 235, 200}},
-	{"lavender", RGB{200, 180, 240}},
-	{"amber", RGB{240, 200, 100}},
-	{"teal", RGB{80, 200, 180}},
-}
+// map to these in order; `c` cycles through them. Set by ApplyTheme; the
+// names are identical in both palettes so a saved highlightColor index
+// keeps meaning the same thing when the theme changes.
+var SelBorderChoices []BorderChoice
 
 // --- background choices ------------------------------------------------
 
@@ -158,9 +153,10 @@ type BackgroundColor struct {
 
 // BackgroundColors — the fill colors offered in the background menu, in
 // order. "terminal" keeps today's transparency; the rest are the background
-// colors of the dark editor/terminal themes developers actually use, so the
-// picker feels familiar. The menu appends a "custom hex" entry after these.
-// Cork is an independent toggle, not a list entry.
+// colors of the editor/terminal themes developers actually use, so the
+// picker feels familiar. Dark themes first, then light ones. The menu
+// appends a "custom hex" entry after these. Cork is an independent toggle,
+// not a list entry.
 var BackgroundColors = []BackgroundColor{
 	{"terminal (transparent)", ""},
 	{"true black", "#000000"},
@@ -172,15 +168,17 @@ var BackgroundColors = []BackgroundColor{
 	{"gruvbox", "#282828"},
 	{"nord", "#2e3440"},
 	{"solarized", "#002b36"},
+	{"paper", "#faf8f3"},
+	{"github light", "#ffffff"},
+	{"solarized light", "#fdf6e3"},
+	{"latte", "#eff1f5"},
+	{"gruvbox light", "#fbf1c7"},
 }
 
-var CorkShades = []RGB{
-	CorkDark, CorkDark,
-	CorkMid, CorkMid, CorkMid,
-	CorkLight, CorkLight,
-	CorkRust,
-	CorkWarm,
-}
+// CorkShades — weighted shade pool for the cork texture. Duplicates bias
+// the random pick toward common mid tones, with occasional brighter or
+// rustier accents. Rebuilt by ApplyTheme.
+var CorkShades []RGB
 
 // Chars used to texture the cork surface — main pool. More variety gives
 // the cork a busier, more ASCII-art feel.
@@ -213,53 +211,9 @@ type Tint struct {
 	Edge  RGB // edge highlight when selected
 }
 
-var Tints = map[string]Tint{
-	"yellow": {
-		Name:  "yellow",
-		Paper: RGB{246, 220, 120}, Ink: RGB{250, 230, 145},
-		Fiber: RGB{204, 176, 85}, Tape: RGB{220, 195, 110}, Edge: RGB{255, 240, 170},
-	},
-	"pink": {
-		Name:  "pink",
-		Paper: RGB{245, 175, 200}, Ink: RGB{250, 190, 210},
-		Fiber: RGB{205, 130, 160}, Tape: RGB{220, 150, 180}, Edge: RGB{255, 200, 220},
-	},
-	"blue": {
-		Name:  "blue",
-		Paper: RGB{175, 210, 240}, Ink: RGB{190, 220, 248},
-		Fiber: RGB{130, 170, 205}, Tape: RGB{150, 185, 220}, Edge: RGB{200, 225, 255},
-	},
-	"green": {
-		Name:  "green",
-		Paper: RGB{180, 230, 180}, Ink: RGB{200, 240, 200},
-		Fiber: RGB{130, 190, 130}, Tape: RGB{155, 210, 155}, Edge: RGB{210, 245, 210},
-	},
-	"purple": {
-		Name:  "purple",
-		Paper: RGB{210, 180, 240}, Ink: RGB{225, 195, 248},
-		Fiber: RGB{165, 130, 205}, Tape: RGB{190, 160, 225}, Edge: RGB{230, 205, 255},
-	},
-	"orange": {
-		Name:  "orange",
-		Paper: RGB{245, 200, 140}, Ink: RGB{250, 210, 155},
-		Fiber: RGB{205, 155, 95}, Tape: RGB{222, 178, 120}, Edge: RGB{255, 220, 175},
-	},
-	"teal": {
-		Name:  "teal",
-		Paper: RGB{170, 230, 220}, Ink: RGB{190, 240, 230},
-		Fiber: RGB{125, 185, 180}, Tape: RGB{150, 210, 200}, Edge: RGB{200, 245, 235},
-	},
-	"cream": {
-		Name:  "cream",
-		Paper: RGB{235, 225, 205}, Ink: RGB{245, 235, 215},
-		Fiber: RGB{195, 185, 160}, Tape: RGB{215, 205, 185}, Edge: RGB{250, 245, 225},
-	},
-	"coral": {
-		Name:  "coral",
-		Paper: RGB{245, 180, 165}, Ink: RGB{250, 195, 180},
-		Fiber: RGB{210, 135, 120}, Tape: RGB{225, 155, 140}, Edge: RGB{255, 205, 190},
-	},
-}
+// Tints — the active tint set, swapped by ApplyTheme. Both palettes use
+// the same nine keys so a note's saved tint name always resolves.
+var Tints map[string]Tint
 
 // TintOrder — 1-9 in order.
 var TintOrder = []string{
