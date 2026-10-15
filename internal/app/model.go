@@ -367,8 +367,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.saver.Touch()
 		}
 		m.setToast(toast)
-		// The editor owned the terminal; take the screen back.
-		return m, tea.Batch(tickCmd(), tea.EnterAltScreen)
+		// Bubble Tea restores the alt screen itself after ExecProcess, but
+		// ReleaseTerminal disables mouse reporting and RestoreTerminal never
+		// re-enables it, so ask for it back here. The tick chain was never
+		// stopped, so do not start a second one.
+		return m, tea.EnableMouseAllMotion
 	}
 	return m, nil
 }
@@ -868,6 +871,10 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 			m.setToast(why)
 			return m, nil
 		}
+		// Snapshot now: by the time the editor's result lands the note
+		// has already changed, so this is the last point where the
+		// pre-edit text still exists.
+		m.mutate("edit in $EDITOR")
 		return m, cmd
 	case "r":
 		if n := m.board.Selection(); n != nil {
@@ -1137,11 +1144,14 @@ func (m model) handleEditKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		title, body := m.editor.Split()
 		n.Title = title
 		n.Body = body
+		m.saver.Touch() // the card's text is now the note's text; persist it
 		cmd, why := openInEditor(n)
 		if cmd == nil {
 			m.setToast(why)
 			return m, nil
 		}
+		// Snapshot before suspending, same as the `e` path.
+		m.mutate("edit in $EDITOR")
 		// Leave the card: re-entering with the external result already
 		// applied is clearer than splicing it into the live textarea.
 		m.mode = ModeBoard
