@@ -53,6 +53,8 @@ type model struct {
 	stars     []Star
 	saver     *Saver
 
+	resizeID               string // note being resized by corner drag
+	resizeDx, resizeDy     int    // grab offset to the corner, SCREEN cells
 	grabID                 string
 	grabDx, grabDy         int
 	grabStartX, grabStartY int // world-coords at press, used to detect click vs drag
@@ -669,6 +671,14 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		return m.nudgeSel(0, -5)
 	case "shift+down":
 		return m.nudgeSel(0, 5)
+	case "H":
+		return m.resizeSel(-2, 0)
+	case "L":
+		return m.resizeSel(2, 0)
+	case "K":
+		return m.resizeSel(0, -1)
+	case "J":
+		return m.resizeSel(0, 1)
 	case "enter":
 		if m.pull.Active {
 			m.pull.Stop()
@@ -933,6 +943,20 @@ func (m model) flashSel() (tea.Model, tea.Cmd) {
 // nudgeSel moves the selected note by SCREEN-cell deltas (converted to
 // world) and triggers a directional overshoot bounce. This keeps nudges
 // feeling like "move one cell" at any zoom level.
+// resizeSel grows/shrinks the selected note by (dw, dh) world cells.
+func (m model) resizeSel(dw, dh int) (tea.Model, tea.Cmd) {
+	n := m.board.Selection()
+	if n == nil {
+		return m, nil
+	}
+	w, h := n.WorldSize()
+	n.SetWorldSize(w+dw, h+dh)
+	n.Flash = 0.4
+	n.Updated = time.Now().UTC()
+	m.saver.Touch()
+	return m, nil
+}
+
 func (m model) nudgeSel(dx, dy int) (tea.Model, tea.Cmd) {
 	n := m.board.Selection()
 	if n == nil {
@@ -1088,6 +1112,16 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			m.hoverStr = -1
 			return m, nil
 		}
+		if hit := m.board.Notes[idx]; hit.OnResizeHandle(msg.X, msg.Y, m.board.Zoom) {
+			m.board.Raise(idx)
+			r := hit.ScreenRect(m.board.Zoom)
+			m.resizeID = hit.ID
+			m.resizeDx = r.X + r.W - msg.X
+			m.resizeDy = r.Y + r.H - msg.Y
+			hit.Flash = 0.6
+			m.hoverStr = -1
+			return m, nil
+		}
 		m.board.Raise(idx)
 		n := m.board.Notes[len(m.board.Notes)-1]
 		m.grabID = n.ID
@@ -1111,6 +1145,16 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.lastClickN = n.ID
 
 	case tea.MouseActionMotion:
+		if m.resizeID != "" {
+			if n := m.findNote(m.resizeID); n != nil {
+				r := n.ScreenRect(m.board.Zoom)
+				// New screen size so the corner follows the cursor.
+				sw := msg.X + m.resizeDx - r.X
+				sh := msg.Y + m.resizeDy - r.Y
+				s := zoomScale(m.board.Zoom)
+				n.SetWorldSize(int(float32(sw)/s+0.5), int(float32(sh)/s+0.5))
+			}
+		}
 		if m.grabID != "" {
 			if n := m.findNote(m.grabID); n != nil {
 				wx := WorldX(msg.X, m.board.Zoom)
@@ -1121,6 +1165,13 @@ func (m model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case tea.MouseActionRelease:
+		if m.resizeID != "" {
+			if n := m.findNote(m.resizeID); n != nil {
+				n.Updated = time.Now().UTC()
+				m.saver.Touch()
+			}
+			m.resizeID = ""
+		}
 		if m.grabID != "" {
 			if n := m.findNote(m.grabID); n != nil {
 				moved := n.X != m.grabStartX || n.Y != m.grabStartY
@@ -1428,6 +1479,7 @@ type helpColumn struct {
 var helpData = []helpColumn{
 	{"MOUSE", []helpEntry{
 		{"drag", "move"},
+		{"drag ◢", "resize"},
 		{"click", "select"},
 		{"dblclk", "zoom"},
 	}},
@@ -1435,6 +1487,8 @@ var helpData = []helpColumn{
 		{"arrows", "nudge"},
 		{"hjkl", "nudge"},
 		{"S-arr", "big nudge"},
+		{"H L", "width"},
+		{"K J", "height"},
 		{"tab", "next"},
 		{"S-tab", "prev"},
 	}},
