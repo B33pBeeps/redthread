@@ -44,6 +44,8 @@ func vimKey(t *testing.T, m model, key string) model {
 		msg = tea.KeyMsg{Type: tea.KeyBackspace}
 	case "ctrl+s":
 		msg = tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "ctrl+p":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlP}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(key)}
 	}
@@ -308,5 +310,53 @@ func TestVimCardRendersAnEmptyNote(t *testing.T) {
 	m.mode = ModeEdit
 	if out := m.View(); out == "" {
 		t.Error("empty view for an empty note")
+	}
+}
+
+// ctrl+p in normal mode must land in the vim buffer, not the hidden
+// textarea, or the paste is invisible and lost on the next mode switch.
+func TestPasteInNormalModeReachesTheBuffer(t *testing.T) {
+	prev := readClipboard
+	readClipboard = func() (string, error) { return "PASTED", nil }
+	t.Cleanup(func() { readClipboard = prev })
+
+	m := newVimModel(t)
+	m.editor.Vim.SetText("title\n\nbody")
+	m = vimKey(t, m, "ctrl+p")
+	if !strings.Contains(m.editor.Vim.Text(), "PASTED") {
+		t.Errorf("paste did not reach the vim buffer: %q", m.editor.Vim.Text())
+	}
+	if m.editor.Vim.Mode != VimNormal {
+		t.Errorf("mode after paste = %v; want normal", m.editor.Vim.Mode)
+	}
+	// And it survives entering insert mode, which re-syncs the textarea.
+	m = vimKey(t, m, "i")
+	if !strings.Contains(m.editor.Ta.Value(), "PASTED") {
+		t.Errorf("paste lost on entering insert mode: %q", m.editor.Ta.Value())
+	}
+}
+
+// --vim turns modal editing on and is remembered; --vim=false is the way
+// back out. RT_VIM only ever turns it on, and the saved choice stands
+// when neither is given.
+func TestVimPreference(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		saved, flagSet, flag bool
+		env                  string
+		want                 bool
+	}{
+		{"nothing set keeps saved off", false, false, false, "", false},
+		{"nothing set keeps saved on", true, false, false, "", true},
+		{"--vim turns it on", false, true, true, "", true},
+		{"--vim=false turns it off", true, true, false, "", false},
+		{"RT_VIM=1 turns it on", false, false, false, "1", true},
+		{"RT_VIM=0 leaves saved on alone", true, false, false, "0", true},
+		{"flag beats env", true, true, false, "1", false},
+	} {
+		if got := vimPreference(tc.saved, tc.flagSet, tc.flag, tc.env); got != tc.want {
+			t.Errorf("%s: vimPreference(saved=%v, flagSet=%v, flag=%v, env=%q) = %v; want %v",
+				tc.name, tc.saved, tc.flagSet, tc.flag, tc.env, got, tc.want)
+		}
 	}
 }

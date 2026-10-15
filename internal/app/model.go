@@ -1136,11 +1136,23 @@ func (m model) handleEditKey(msg tea.KeyMsg, key string) (tea.Model, tea.Cmd) {
 		m.copyNoteText(title, body)
 		return m, nil
 	case "ctrl+p":
-		if text, err := readClipboard(); err == nil && text != "" {
-			m.editor.Ta.InsertString(text)
-		} else {
+		text, err := readClipboard()
+		if err != nil || text == "" {
 			m.setToast("clipboard empty")
+			return m, nil
 		}
+		if v := m.editor.Vim; v != nil && v.Mode != VimInsert {
+			// Normal/visual: the vim buffer is authoritative and the
+			// textarea is stale. Hand the buffer across, insert there,
+			// and pull the result back, ending in normal mode.
+			m.editor.SyncToTextarea()
+			m.editor.Ta.InsertString(text)
+			m.editor.SyncFromTextarea()
+			v.Mode = VimNormal
+			v.clamp()
+			return m, nil
+		}
+		m.editor.Ta.InsertString(text)
 		return m, nil
 	case "ctrl+e":
 		// Hand off to $EDITOR from inside the card. Commit the live buffer
