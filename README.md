@@ -237,6 +237,7 @@ Off by default. Turn it on for a run, or for good:
 
 ```bash
 redthread --vim           # this run (and remembered afterwards)
+redthread --vim=false     # turn it off again (also remembered)
 export RT_VIM=1           # for a shell rc or tmux config
 ```
 
