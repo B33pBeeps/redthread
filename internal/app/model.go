@@ -833,10 +833,8 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 	case "J":
 		return m.resizeSel(0, 1)
 	case "enter":
-		if m.pull.Active {
-			m.pull.Stop()
-			return m, nil
-		}
+		// (A pull in progress never reaches here: handlePullKey consumes
+		// enter to commit it.)
 		if n := m.board.Selection(); n != nil {
 			// Snapshot once on the way in: an editing session undoes as a
 			// single step, back to the text as it was before the zoom.
@@ -1493,8 +1491,14 @@ func (m model) drawBoardView(c *Canvas) {
 			if !cork {
 				oldStars = nil
 			}
+			// SelBorder is a package global that refreshActive already
+			// pointed at the incoming board's highlight; draw the outgoing
+			// board with its own, then put the new one back.
+			prevBorder := SelBorder
+			m.boardAnimFrom.ApplyGlobalBorder()
 			drawBoardSnapshot(sub, m.boardAnimFrom, oldStars,
 				"", -1, nil, nil)
+			SelBorder = prevBorder
 			sub.Dim(1.0 - 0.85*local)
 			ox := -m.boardAnimDir * int(local*slideMax+0.5)
 			c.BlitAt(sub, ox, 0)

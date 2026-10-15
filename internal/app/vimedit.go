@@ -19,7 +19,7 @@ import (
 
 // vimRender draws the buffer with a block cursor, sized to the card's
 // body area. Returns the lines to splice into the frame.
-func vimRender(v *VimState, width, height int, ink, cursorFg, cursorBg RGB) string {
+func vimRender(v *VimState, width, height int, ink, cursorFg, cursorBg RGB, bg *RGB) string {
 	if width < 1 {
 		width = 1
 	}
@@ -43,6 +43,11 @@ func vimRender(v *VimState, width, height int, ink, cursorFg, cursorBg RGB) stri
 	}
 
 	inkStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(ink.Hex()))
+	if bg != nil {
+		// Solid fill: paint the text cells too, so the card body does not
+		// show the terminal background behind the glyphs.
+		inkStyle = inkStyle.Background(lipgloss.Color(bg.Hex()))
+	}
 	curStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(cursorFg.Hex())).
 		Background(lipgloss.Color(cursorBg.Hex()))

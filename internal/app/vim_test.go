@@ -728,7 +728,7 @@ func TestMultiByteRunesSurviveEditing(t *testing.T) {
 
 func TestMultiByteRenderingIsIntact(t *testing.T) {
 	v := newVim("• drag with the mouse", 0, 0)
-	out := vimRender(v, 40, 5, RGB{200, 200, 200}, RGB{0, 0, 0}, RGB{255, 255, 255})
+	out := vimRender(v, 40, 5, RGB{200, 200, 200}, RGB{0, 0, 0}, RGB{255, 255, 255}, nil)
 	if !utf8ValidString(out) {
 		t.Errorf("vimRender produced invalid UTF-8: %q", out)
 	}

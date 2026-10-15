@@ -187,6 +187,7 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 	borderCol := tint.Paper
 	liveTitle, _ := e.Split()
 	frame := NewCanvas(rect.W, rect.H)
+	frame.DefaultBg = bgColor // undimmed: the card sits in front of the fade
 	drawNoteFrame(frame, Rect{X: 0, Y: 0, W: rect.W, H: rect.H},
 		n, true, textMode, liveTitle, &borderCol)
 	bg := c.Serialize()
@@ -205,9 +206,17 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 		// place.
 		bodyView = vimRender(e.Vim,
 			editBodyWidth(rect), editBodyHeight(rect),
-			tint.Ink, tint.Paper, tint.Ink)
+			tint.Ink, tint.Paper, tint.Ink, bgColor)
 		bodyView = StyleViewText(bodyView, textMode)
 	} else {
+		if bgColor != nil {
+			// The textarea pads its lines with plain spaces; give them the
+			// fill so the terminal does not show through the card body.
+			// e is a copy here, so this only affects this render.
+			fill := lipgloss.NewStyle().Background(lipgloss.Color(bgColor.Hex()))
+			e.Ta.FocusedStyle.Base = fill
+			e.Ta.BlurredStyle.Base = fill
+		}
 		bodyView = StyleViewText(e.Ta.View(), textMode)
 	}
 	bg = SpliceOverlay(bg, bodyView, bodyX, bodyY)
@@ -217,19 +226,13 @@ func (e Editor) View(w, h int, n *Note, stars []Star, textMode TextStyleMode, bo
 	if e.Vim != nil {
 		footerText = vimModeLabel(e.Vim)
 	}
-	footer := lipgloss.NewStyle().
+	footerStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(Footer.Hex())).
-		Width(w).Align(lipgloss.Center).
-		Render(footerText)
+		Width(w).Align(lipgloss.Center)
+	if bgColor != nil {
+		footerStyle = footerStyle.Background(lipgloss.Color(bgColor.Hex()))
+	}
+	footer := footerStyle.Render(footerText)
 
 	return bg + "\n" + footer
-}
-
-// --- shared helpers ---------------------------------------------------
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
