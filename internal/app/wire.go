@@ -86,27 +86,6 @@ func drawStringsInFront(c *Canvas, b *Board, pull *PullState, hoverIdx int, atta
 	}
 }
 
-// drawAllStrings is the legacy combined renderer (used by the edit-mode
-// backdrop where draw order is just one pass). `override`, if non-nil,
-// substitutes the screen pin position of one specific note — used in
-// edit mode so strings keep attaching to the floating card instead of
-// popping back to the original pin.
-func drawAllStrings(c *Canvas, b *Board, pull *PullState, hoverIdx int, override *PinOverride) {
-	drawStringSet(c, b, hoverIdx, false, "", override)
-	drawStringSet(c, b, hoverIdx, true, "", override)
-	if pull != nil && pull.Active {
-		from := b.FindNote(pull.FromID)
-		if from != nil {
-			fx, fy := from.PinPos(b.Zoom)
-			vx := int(pull.VX + 0.5)
-			vy := int(pull.VY + 0.5)
-			drawCurve(c, fx, fy, vx, vy, false, StringRd, AttrBold)
-			c.SetRune(fx, fy, '◆', StringRd, AttrBold)
-			c.SetRune(vx, vy, '◉', StringHi, AttrBold)
-		}
-	}
-}
-
 // drawStringSet is the shared inner loop. It draws strings whose
 // effective in-front layer matches `inFront`. If `attachToTopID` is set,
 // any string touching that note is forced to the in-front layer so the

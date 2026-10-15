@@ -26,9 +26,6 @@ type Cell struct {
 	Attr uint8 // Attr* bits
 }
 
-// IsEmpty returns true if the cell is the fully-transparent default.
-func (c Cell) IsEmpty() bool { return c.Rune == 0 && c.Fg == nil && c.Attr == 0 }
-
 type Canvas struct {
 	W, H  int
 	cells []Cell // row-major, len == W*H
@@ -49,12 +46,6 @@ func NewCanvas(w, h int) *Canvas {
 	return &Canvas{W: w, H: h, cells: make([]Cell, w*h)}
 }
 
-func (c *Canvas) Clear() {
-	for i := range c.cells {
-		c.cells[i] = Cell{}
-	}
-}
-
 func (c *Canvas) Inside(x, y int) bool {
 	return x >= 0 && y >= 0 && x < c.W && y < c.H
 }
@@ -64,13 +55,6 @@ func (c *Canvas) Get(x, y int) Cell {
 		return Cell{}
 	}
 	return c.cells[y*c.W+x]
-}
-
-func (c *Canvas) Set(x, y int, cell Cell) {
-	if !c.Inside(x, y) {
-		return
-	}
-	c.cells[y*c.W+x] = cell
 }
 
 // SetRune writes just rune+fg+attr without allocation.
@@ -160,20 +144,6 @@ func (c *Canvas) Serialize() string {
 		}
 	}
 	return b.String()
-}
-
-// FillRect writes a single rune + style across a rectangular area,
-// overwriting whatever was there (useful for drop shadows, clears, etc).
-func (c *Canvas) FillRect(x, y, w, h int, r rune, fg *RGB, attr uint8) {
-	for dy := 0; dy < h; dy++ {
-		for dx := 0; dx < w; dx++ {
-			px, py := x+dx, y+dy
-			if !c.Inside(px, py) {
-				continue
-			}
-			c.cells[py*c.W+px] = Cell{Rune: r, Fg: fg, Attr: attr}
-		}
-	}
 }
 
 // BlankRect clears a rectangle back to transparent.

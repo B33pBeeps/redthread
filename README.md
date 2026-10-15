@@ -53,7 +53,7 @@ strings, smooth zoom, and multiple named boards you can switch between.
 
 ## Install
 
-Requires **Go 1.23+**.
+Requires **Go 1.24+**.
 
 ```bash
 git clone https://github.com/B33pBeeps/redthread.git
@@ -396,14 +396,48 @@ internal/app/
   history.go        undo/redo stack over workspace snapshots
 
 docs/
-  screenshot.png
-
-DESIGN.md           early design notes (historical)
+  hero.gif, feel.gif, strings.gif, boards.gif   the demos above
 ```
 
 ## Changelog
 
-**Latest**
+**Latest — v0.7.3**
+
+The first tagged release, and the first with outside contributions. Thank you
+[@saforem2](https://github.com/saforem2), [@ambareeshav](https://github.com/ambareeshav)
+and [@webbrain-one](https://github.com/webbrain-one).
+
+*Features*
+- **Light terminal palette** with auto-detection, `--theme=light|dark|auto`, `RT_THEME`,
+  and a `T` toggle that is remembered; five light fills in the background picker.
+  The dark palette is unchanged. ([#3](https://github.com/B33pBeeps/redthread/pull/3), @saforem2)
+- **Undo everything** — a 50-step undo/redo stack (`u` / `ctrl+r`) covering every change,
+  including deleted boards; `ctrl+p` over a non-empty note asks first; each content-changing
+  save keeps the previous `notes.json` under `backups/`, newest 20.
+  ([#4](https://github.com/B33pBeeps/redthread/pull/4), @saforem2)
+- **Open a note in `$EDITOR`** — `e` on the board or `ctrl+e` in the card hands the note
+  to your editor as a markdown file and reads it back; every failure path leaves the note alone.
+  ([#5](https://github.com/B33pBeeps/redthread/pull/5), @saforem2)
+- **Optional vim bindings** in the note card: `--vim` / `RT_VIM=1`, off by default,
+  `--vim=false` turns it off again. ([#6](https://github.com/B33pBeeps/redthread/pull/6), @saforem2)
+- **Resizable notes** — drag the bottom-right corner, or `H`/`L` and `K`/`J`; sizes persist
+  and scale with zoom. ([#7](https://github.com/B33pBeeps/redthread/pull/7), @ambareeshav)
+- README fix for the menu.go description. ([#2](https://github.com/B33pBeeps/redthread/pull/2), @webbrain-one)
+
+*Fixes*
+- Keyboard nudges and resizes are undoable like mouse moves; a refused last-board delete
+  no longer consumes an undo slot.
+- Returning from `$EDITOR` gives the mouse back and no longer doubles the animation tick.
+- `ctrl+p` in vim normal/visual mode pastes into the live buffer instead of a hidden one.
+- With a solid fill color, the open card and footer now use the fill instead of the
+  terminal background.
+- The outgoing board in a board-switch crossfade is drawn with its own highlight color.
+- The debounced saver no longer reads the live workspace from its timer goroutine
+  (a data race under heavy editing); it snapshots on the UI thread instead.
+- Tests can no longer touch the real `notes.json`: the package redirects `XDG_DATA_HOME`
+  to a temp dir for every test.
+
+**Previous**
 
 *Features*
 - Background is now configurable — press `b` for a picker with two independent axes:
@@ -413,7 +447,7 @@ DESIGN.md           early design notes (historical)
   freely; the choice is global to the workspace and persists.
   ([#1](https://github.com/B33pBeeps/redthread/issues/1))
 
-**Previous**
+**Earlier**
 
 *Fixes*
 - Fullwidth font removed — it never rendered correctly.

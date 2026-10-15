@@ -65,17 +65,6 @@ func (c RGB) Dimmed(f float32) RGB {
 	return RGB{uint8(float32(c.R) * f), uint8(float32(c.G) * f), uint8(float32(c.B) * f)}
 }
 
-func (c RGB) Brighter(f float32) RGB {
-	up := func(v uint8) uint8 {
-		x := float32(v) + (255-float32(v))*f
-		if x > 255 {
-			x = 255
-		}
-		return uint8(x)
-	}
-	return RGB{up(c.R), up(c.G), up(c.B)}
-}
-
 // Lerp blends two colors linearly (0 → a, 1 → b).
 func Lerp(a, b RGB, t float32) RGB {
 	if t < 0 {
@@ -196,9 +185,6 @@ var BlotchChars = []rune{'░', '▒'}
 // Chars used for the note's own paper-fiber flecks.
 var FiberChars = []rune{'.', '·', ',', '\'', '˙'}
 
-// Chars used inside the drop shadow for texture.
-var ShadowChars = []rune{'▒', '░', '▓', '▞', '▚'}
-
 // --- note tints --------------------------------------------------------
 
 // A Tint is a named color set for a sticky-note look.
@@ -238,8 +224,6 @@ var Bayer4x4 = [4][4]int{
 	{15, 7, 13, 5},
 }
 
-var HalftoneLadder = []rune{' ', '░', '▒', '▓', '█'}
-
 // DitherShade returns a halftone char for a given (x,y) and density 0..1.
 func DitherShade(x, y int, density float32) rune {
 	if density <= 0 {
@@ -262,17 +246,6 @@ func DitherShade(x, y int, density float32) rune {
 	default:
 		return '█'
 	}
-}
-
-// HalftoneChar is a simple level lookup (0..4).
-func HalftoneChar(level int) rune {
-	if level < 0 {
-		level = 0
-	}
-	if level >= len(HalftoneLadder) {
-		level = len(HalftoneLadder) - 1
-	}
-	return HalftoneLadder[level]
 }
 
 // --- text styles --------------------------------------------------------

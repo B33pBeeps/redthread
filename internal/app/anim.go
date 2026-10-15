@@ -100,11 +100,6 @@ func (t *Transition) Done(now time.Time) bool {
 
 // --- easings ---------------------------------------------------------
 
-func easeOutCubic(t float32) float32 {
-	u := 1 - t
-	return 1 - u*u*u
-}
-
 func easeInOutCubic(t float32) float32 {
 	if t < 0.5 {
 		return 4 * t * t * t

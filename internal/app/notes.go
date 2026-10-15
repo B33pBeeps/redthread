@@ -687,12 +687,6 @@ type Star struct {
 	Color RGB
 }
 
-// GenStars returns a stable cork-texture for (w,h) using the default seed.
-// For per-board grain, use GenStarsForBoard.
-func GenStars(w, h int) []Star {
-	return GenStarsForBoard(w, h, 0)
-}
-
 // GenStarsForBoard returns a cork-texture stable across resizes-of-equal-size
 // AND distinct per `grainSeed`. Row 0 is reserved for the tab bar — no
 // stars are placed there.
