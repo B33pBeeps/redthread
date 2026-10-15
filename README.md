@@ -39,6 +39,9 @@ strings, smooth zoom, and multiple named boards you can switch between.
   settles into a card with a live textarea.
 - **Or edit in `$EDITOR`** — `e` hands the note to your real editor as a
   markdown file and reads it back when you quit. See [External editor](#external-editor).
+- **Optional vim bindings** — `--vim` turns the note card modal: normal /
+  insert / visual, the motions and operators you actually use. Off by
+  default. See [Vim mode](#vim-mode).
 - **9 paper tints + 9 highlight colors + 8 text styles** (Unicode math
   alphabets: plain, bold, italic, bold-italic, script, fraktur,
   double-struck, monospace).
@@ -193,6 +196,8 @@ distinct. `>` / `<` cycle, `B` creates and drops you straight into rename,
 | `esc` | close + save with reverse transition |
 | `ctrl+s` | save without closing |
 
+With `--vim`, the card is modal — see [Vim mode](#vim-mode).
+
 ## External editor
 
 The built-in card is a textarea — fine for a few lines, less so for a long
@@ -225,6 +230,43 @@ Nothing is written back unless the file actually changed, so quitting
 without saving is a no-op. The note is also left alone if the editor exits
 non-zero (`:cq` in vim), if the file can't be read, or if it comes back
 empty — a stray `:q!` on the wrong buffer shouldn't blank a note.
+
+## Vim mode
+
+Off by default. Turn it on for a run, or for good:
+
+```bash
+redthread --vim           # this run (and remembered afterwards)
+redthread --vim=false     # turn it off again (also remembered)
+export RT_VIM=1           # for a shell rc or tmux config
+```
+
+The card then opens in normal mode, and the footer shows which mode you
+are in. What's implemented:
+
+| | |
+|---|---|
+| motions | `h j k l`, `w b e`, `0 $`, `gg G`, arrow keys |
+| counts | `3l`, `2dd`, `5G`, and so on |
+| insert | `i a I A o O`, `esc` back to normal |
+| delete | `x`, `dd`, `D`, `dw`, `d$`, `d0` |
+| change | `cw`, `cc`, `C` |
+| yank/put | `yy`, `p`, `P`, and `dd` fills the same register (so `ddp` swaps lines) |
+| visual | `v`, then a motion, then `d` / `c` / `y` |
+
+`esc` in normal mode places the note back on the board, the same as `esc`
+without vim enabled. `ctrl+s`, `ctrl+y`, `ctrl+p`, and `ctrl+e` keep their
+meanings in every mode — they are app controls, not editing.
+
+Anything not in that table is ignored rather than approximated. A key that
+silently does something *close* to what vim would do is worse than one
+that does nothing.
+
+The behavior above was checked against real vim: `internal/app/vim_test.go`
+contains a table of buffers and key sequences whose expected results were
+produced by running them through `vim -Nu NONE -es`. That turned up five
+bugs which hand-written tests had happily agreed with, including `dw` on a
+line's last word deleting nothing and `cw` swallowing the following space.
 
 ## Data
 
@@ -348,6 +390,8 @@ internal/app/
   edit.go           canvas-drawn edit frame + bubbles/textarea splice
   menu.go           font-picker + background picker popups
   extedit.go        $EDITOR hand-off (temp file, exec, read back)
+  vim.go            modal editing state machine (buffer + cursor)
+  vimedit.go        renders the vim buffer into the card
   storage.go        XDG JSON persistence, migrations, backup rotation
   history.go        undo/redo stack over workspace snapshots
 
