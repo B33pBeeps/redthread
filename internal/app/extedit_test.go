@@ -7,6 +7,7 @@ package app
 // built-in editor uses, and a bad edit must never destroy the note.
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -377,5 +378,57 @@ func TestRealEditorFailureLeavesTheNote(t *testing.T) {
 	}
 	if n.Body != "keep me" {
 		t.Errorf("body = %q; want it untouched", n.Body)
+	}
+}
+
+// Coming back from the editor must not start a second tick chain (the
+// first one never stopped), and it must give the mouse back, since Bubble
+// Tea leaves mouse reporting disabled after ExecProcess.
+func TestExternalEditDoneRestoresMouseWithoutExtraTick(t *testing.T) {
+	m := newExtEditTestModel(t)
+	t.Cleanup(m.saver.Cancel)
+	n := m.board.Notes[0]
+	_, cmd := m.Update(externalEditDoneMsg{
+		noteID: n.ID, path: filepath.Join(t.TempDir(), "missing.md"), cleanup: func() {},
+	})
+	if cmd == nil {
+		t.Fatal("no command returned")
+	}
+	msg := cmd()
+	if _, isTick := msg.(tickMsg); isTick {
+		t.Fatal("handler re-armed the tick chain")
+	}
+	if got := fmt.Sprintf("%T", msg); got != "tea.enableMouseAllMotionMsg" {
+		t.Errorf("got %s; want the mouse re-enable message", got)
+	}
+}
+
+// An external edit is undoable: the snapshot is taken before the TUI
+// suspends, so `u` afterwards returns the pre-edit text.
+func TestExternalEditIsUndoable(t *testing.T) {
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "true")      // exists everywhere, exits 0 without touching the file
+	t.Setenv("TMPDIR", t.TempDir()) // the hand-off temp file lands here, not in the real /tmp
+	m := newExtEditTestModel(t)
+	t.Cleanup(m.saver.Cancel)
+	n := m.board.Selection()
+	if n == nil {
+		t.Fatal("no selection")
+	}
+	id, origTitle := n.ID, n.Title
+
+	m = pressExtKey(t, m, "e")
+	if !m.history.CanUndo() {
+		t.Fatal("pressing e did not snapshot for undo")
+	}
+	// Simulate what the editor would have done, then the completion.
+	n.Title = "edited externally"
+	_, _ = m.Update(externalEditDoneMsg{
+		noteID: id, path: filepath.Join(t.TempDir(), "missing.md"), cleanup: func() {},
+	})
+
+	m = pressExtKey(t, m, "u")
+	if got := m.findNote(id).Title; got != origTitle {
+		t.Errorf("after undo title = %q; want %q", got, origTitle)
 	}
 }
