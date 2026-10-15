@@ -736,7 +736,11 @@ func (m model) handleBoardKey(key string) (tea.Model, tea.Cmd) {
 		// second press (within the window) actually deletes.
 		if m.now.Before(m.deleteArmedUntil) {
 			name := m.board.Name
-			m.mutate("delete board")
+			// DeleteBoard refuses on the last board; don't burn an undo
+			// slot on a delete that is not going to happen.
+			if len(m.workspace.Boards) > 1 {
+				m.mutate("delete board")
+			}
 			m.startBoardAnim(0)
 			if m.workspace.DeleteBoard(m.workspace.ActiveIdx) {
 				m.refreshActive()
@@ -1024,11 +1028,11 @@ func (m model) resizeSel(dw, dh int) (tea.Model, tea.Cmd) {
 	if n == nil {
 		return m, nil
 	}
+	m.mutate("resize note") // coalesces with a held key; snapshot before the change
 	w, h := n.WorldSize()
 	n.SetWorldSize(w+dw, h+dh)
 	n.Flash = 0.4
 	n.Updated = time.Now().UTC()
-	m.saver.Touch()
 	return m, nil
 }
 
@@ -1037,6 +1041,7 @@ func (m model) nudgeSel(dx, dy int) (tea.Model, tea.Cmd) {
 	if n == nil {
 		return m, nil
 	}
+	m.mutate("move note") // coalesces with a held key; snapshot before the move
 	wdx := ScreenDeltaToWorld(dx, m.board.Zoom)
 	wdy := ScreenDeltaToWorld(dy, m.board.Zoom)
 	n.X += wdx
@@ -1057,7 +1062,6 @@ func (m model) nudgeSel(dx, dy int) (tea.Model, tea.Cmd) {
 		n.Bob = mag
 	}
 	n.Updated = time.Now().UTC()
-	m.saver.Touch()
 	return m, nil
 }
 
